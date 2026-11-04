@@ -795,7 +795,7 @@ namespace RepelService
             var id = (string)o["id"];
             if (string.IsNullOrEmpty(id)) return;
             var dir = await DirForAsync(id);
-            var baseReq = Source.TrimEnd('/') + "/" + id;
+            var baseReq = Source.TrimEnd('/') + "/" + Uri.EscapeDataString(id);
             var tok = FirstToken();
             var q = string.IsNullOrEmpty(tok) ? "" : "?token=" + Uri.EscapeDataString(tok);
             // 1) 拉取远程 manifest
@@ -877,7 +877,8 @@ namespace RepelService
 
         static async Task ServeFile(HttpListenerContext ctx)
         {
-            // URL 路径是百分号编码的：本地缓存文件名用解码后的真实名称，回源 URL 仍会由 HttpClient 重新编码
+            // URL 路径是百分号编码的：本地缓存文件名用解码后的真实名称；回源 URL 的各段在下方用 Uri.EscapeDataString 显式编码，
+            // 与 Propel 端 Uri.UnescapeDataString 形成正确闭环，避免 + # % 空格等特殊字符出错。
             var segs = Uri.UnescapeDataString(ctx.Request.Url.AbsolutePath).Trim('/').Split('/');
             if (segs.Length < 1 || string.IsNullOrEmpty(segs[0])) { ctx.Response.StatusCode = 400; return; }
             var appId = segs[0];
@@ -915,8 +916,14 @@ namespace RepelService
             // 回源
             if (string.IsNullOrEmpty(Source)) { Interlocked.Increment(ref _fileMiss); ctx.Response.StatusCode = 404; Log("文件下载失败 [" + SafeAddr(ctx.Request) + "] " + showRel + "（未配置 Propel 源）"); return; }
             var token = ctx.Request.QueryString["token"] ?? "";
-            var url = $"{Source.TrimEnd('/')}/{appId}/{rel}";
-            if (!string.IsNullOrEmpty(token)) url += "?token=" + token; // 透传客户端 token 回源
+            // 回源 URL 各路径段单独用 Uri.EscapeDataString 编码（仅保留 '/' 作分隔），
+            // 与 Propel 端 Uri.UnescapeDataString 对应；token 也编码，确保任意特殊字符都稳妥。
+            var appIdEnc = Uri.EscapeDataString(appId);
+            var relEnc = segs.Length > 1
+                ? string.Join("/", segs.Skip(1).Select(s => Uri.EscapeDataString(s)).ToArray())
+                : "";
+            var url = $"{Source.TrimEnd('/')}/{appIdEnc}/{relEnc}";
+            if (!string.IsNullOrEmpty(token)) url += "?token=" + Uri.EscapeDataString(token);
             try
             {
                 // 流式回源：边收边转发并落盘，不整读内存；用 WarmHttp（10 分钟超时）适配大文件
