@@ -1,0 +1,45 @@
+name: Build
+
+# 触发条件：
+#   1) 推送新的版本号标签（如 26.1.0）时自动编译
+#   2) 允许在 Actions 页面手动触发（workflow_dispatch）
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build all projects (Release)
+        run: |
+          dotnet build -c Release Impel/Impel.csproj
+          dotnet build -c Release RepelService/RepelService.csproj
+          dotnet build -c Release PropelService/PropelService.csproj
+          dotnet build -c Release RepelControl/RepelControl.csproj
+          dotnet build -c Release PropelControl/PropelControl.csproj
+          dotnet build -c Release repelView/repelView.csproj
+          dotnet build -c Release ManifestGen/ManifestGen.csproj
+
+      - name: Stage dist (还原本地部署布局)
+        run: |
+          New-Item -ItemType Directory -Force -Path dist\repel, dist\propel | Out-Null
+          Copy-Item -Path "RepelService\bin\Release\net48\*" -Destination "dist\repel" -Recurse -Force
+          Copy-Item -Path "PropelService\bin\Release\net48\*" -Destination "dist\propel" -Recurse -Force
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ github.ref_name }}
+          path: dist
