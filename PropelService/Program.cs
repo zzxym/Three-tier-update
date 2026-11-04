@@ -310,7 +310,10 @@ namespace PropelService
                 while (!string.IsNullOrEmpty(line = reader.ReadLine())) { }
                 int q = rawUrl.IndexOf('?');
                 var path = q >= 0 ? rawUrl.Substring(0, q) : rawUrl;
-                path = WebUtility.UrlDecode(path);
+                // 仅查询字符串才把 '+' 视为空格；路径中的 '+' 是合法字符，必须用 Uri.UnescapeDataString，
+                // 否则 chrome++.ini 这类含 '+' 的文件名会被误解码成空格而 404。
+                try { path = Uri.UnescapeDataString(path); }
+                catch { path = WebUtility.UrlDecode(path); }
                 var req = new Request { Path = path };
                 if (q >= 0)
                 {
