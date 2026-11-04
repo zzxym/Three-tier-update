@@ -1,8 +1,8 @@
-name: Build
+name: Build and Release
 
 # 触发条件：
-#   1) 推送新的版本号标签（如 26.1.0）时自动编译
-#   2) 允许在 Actions 页面手动触发（workflow_dispatch）
+#   1) 推送新的版本号标签（如 26.1.0）时自动编译并发布 GitHub Release（含安装包）
+#   2) 允许在 Actions 页面手动触发（workflow_dispatch），仅产出安装包产物，不发布 Release
 on:
   push:
     tags:
@@ -32,14 +32,69 @@ jobs:
           dotnet build -c Release repelView/repelView.csproj
           dotnet build -c Release ManifestGen/ManifestGen.csproj
 
-      - name: Stage dist (还原本地部署布局)
+      - name: Stage binaries for installers
         run: |
-          New-Item -ItemType Directory -Force -Path dist\repel, dist\propel | Out-Null
-          Copy-Item -Path "RepelService\bin\Release\net48\*" -Destination "dist\repel" -Recurse -Force
-          Copy-Item -Path "PropelService\bin\Release\net48\*" -Destination "dist\propel" -Recurse -Force
+          New-Item -ItemType Directory -Force -Path stage/impel, stage/repel, stage/propel | Out-Null
+          # 客户端（Impel 端）：Impel 直接产出到 dist/impel
+          Copy-Item -Recurse -Force "dist/impel/*" "stage/impel/"
+          # 局域网服务端（Repel 端）：RepelService + RepelControl + repelView
+          Copy-Item -Recurse -Force "RepelService/bin/Release/net48/*" "stage/repel/"
+          Copy-Item -Recurse -Force "RepelControl/bin/Release/net48/*" "stage/repel/"
+          Copy-Item -Recurse -Force "repelView/bin/Release/net48/*" "stage/repel/"
+          # Propel 发布源：PropelService + PropelControl
+          Copy-Item -Recurse -Force "PropelService/bin/Release/net48/*" "stage/propel/"
+          Copy-Item -Recurse -Force "PropelControl/bin/Release/net48/*" "stage/propel/"
 
-      - name: Upload dist artifact
+      - name: Install Inno Setup
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            Write-Host "Downloading Inno Setup..."
+            Invoke-WebRequest -Uri "https://jrsoftware.org/download.php/is.exe" -OutFile "$env:TEMP\is.exe"
+            Start-Process "$env:TEMP\is.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/ALLUSERS" -Wait
+          }
+          if (-not (Test-Path $iscc)) {
+            Write-Host "ISCC still missing, trying winget..."
+            winget install --id JRSoftware.InnoSetup -e --source winget --accept-package-agreements --accept-source-agreements --silent
+          }
+          if (-not (Test-Path $iscc)) { throw "Inno Setup ISCC.exe not found after install" }
+          Write-Host "ISCC found: $iscc"
+
+      - name: Compile installers (ISCC)
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          $isl = "C:\Program Files (x86)\Inno Setup 6\Languages\ChineseSimplified.isl"
+          $lang = if (Test-Path $isl) { "compiler:Languages\ChineseSimplified.isl" } else { "compiler:Default.isl" }
+          Write-Host "Using MessagesFile: $lang"
+          foreach ($f in @("installer/client-server.iss","installer/propel.iss")) {
+            (Get-Content $f) -replace 'MessagesFile: "compiler:Languages\\ChineseSimplified.isl"', "MessagesFile: `"$lang`"" | Set-Content $f
+          }
+          & $iscc "installer/client-server.iss"; if ($LASTEXITCODE -ne 0) { throw "ISCC failed for client-server" }
+          & $iscc "installer/propel.iss"; if ($LASTEXITCODE -ne 0) { throw "ISCC failed for propel" }
+          if (-not (Test-Path "installer-output/ThreeTier-ClientServer-setup.exe")) { throw "missing client-server exe" }
+          if (-not (Test-Path "installer-output/ThreeTier-Propel-setup.exe")) { throw "missing propel exe" }
+          Write-Host "Installers built successfully"
+
+      - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ github.ref_name }}
-          path: dist
+          name: installers-${{ github.ref_name }}
+          path: installer-output/*.exe
+
+      - name: Publish GitHub Release (仅标签触发)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          files: installer-output/*.exe
+          body: |
+            ## 天一网络三层更新 ${{ github.ref_name }}
+
+            自动构建安装包（CC BY-NC-SA 4.0 授权，禁止商用；任何公司/组织将其部署以提供对第三方客户的服务均视为商业使用，不在授权范围内）。
+
+            - **ThreeTier-ClientServer-setup.exe**：客户端（Impel）与局域网服务端（Repel）二选一安装
+              - 客户端：Impel
+              - 服务端：RepelService + RepelControl + repelView
+            - **ThreeTier-Propel-setup.exe**：Propel 发布源（PropelControl + PropelService）
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
