@@ -1,7 +1,7 @@
-# 软件管理菜单与三层对比更新系统（MenuClient）
+# 游戏和软件三层对比更新系统及客户端菜单
 
 一个用于内网环境的绿色软件集中启动 + 版本比对 / 差异更新 / 损坏修复系统。
-采用 **C# / .NET Framework 4.8（WPF）** 实现。
+采用 **C# / .NET Framework 4.8** 实现。
 
 ## 背景
 
@@ -16,7 +16,7 @@
 - **VB6 只能编译 32 位 EXE**，在今天的 **Windows 10 / Windows 11** 上兼容性、性能与稳定性都不再理想；
 - 服务端强依赖 **Apache** 等外部 HTTP 服务器，部署、配置与运维成本高，不利于快速落地。
 
-因此本项目用 **C# / .NET Framework 4.8（WPF）** 对客户端做了完整重写，并**重写服务器端**——
+因此本项目用 **C# / .NET Framework 4.8** 对客户端做了完整重写，并**重写服务器端**——
 自带轻量 HTTP 服务（不再依赖 Apache 等第三方服务器），让整个三层更新系统的**部署更加简单**。
 
 ## 三层架构
@@ -27,37 +27,34 @@
 Propel（中心源 / 发布源）  ──►  Repel（分支 / 缓存 / P2P 注册）  ──►  Impel（客户端）
 ```
 
-- **第 1 层 · 源（Propel）**：`PropelService` 提供发布源 HTTP 服务，对外暴露 `all.lst`
+- **第 1 层 · 源（Propel）**：`PropelService` 部署在自己公司，并对外映射端口，提供发布源 HTTP 服务，对外暴露 `all.lst`
   应用清单与文件下载（支持分片续传），并以 token 做租户鉴权。配套 `PropelControl`（发布工具）
   与 `ManifestGen`（清单 / 启动信息生成器 `MakeManifest.exe`）。
-- **第 2 层 · 分支 / 缓存（Repel）**：`RepelService` 回源 Propel 并做磁盘缓存，
+- **第 2 层 · 分支 / 缓存（Repel）**：`RepelService` 部署在客户那边的一台电脑上，回源 Propel 并做磁盘缓存，
   同时提供 peer 注册与查询，让客户端之间走 P2P 就近分发；`RepelControl` 用于维护
   注册表（`repel.lst`）。对应原架构中「分支缓存」一层。
-- **第 3 层 · 客户端（Impel）**：`Impel` 是 WPF 桌面客户端，悬浮坞式启动菜单，
+- **第 3 层 · 客户端（Impel）**：`Impel` 是桌面客户端，悬浮坞式启动菜单，
   内置更新引擎（manifest 比对 / 差异下载 / sha256 校验 / 损坏修复）与 P2P 提供端
-  （把已装文件共享给同网段其他客户端）。对应原架构中挂在无盘工作站上的「游戏菜单」。
+  （把已装文件共享给同局域网其他客户端）。对应原架构中挂在无盘工作站上的「游戏菜单」。
 
 ## 目录结构（仓库源码）
 
 ```
 MenuClient/
-  Impel/           WPF 客户端：悬浮坞、更新引擎、P2P 提供端、配置、图标、启动器、设置
+  Impel/           客户端：悬浮坞、更新引擎、P2P 提供端、配置、图标、启动器、设置
   RepelService/    HTTP P2P 注册 / 缓存服务（回源 Propel 并磁盘缓存，提供 peer 查询）
-  RepelControl/    WPF 管控台（维护 repel.lst 注册表）
-  repelView/       WPF 查看器（查看分发清单 / 缓存状态）
+  RepelControl/    管控台（维护 repel.lst 注册表）
+  repelView/       查看器（查看分发清单 / 缓存状态）
   PropelService/   发布源 HTTP 服务（中心源：all.lst + 文件下载 + 令牌鉴权）
-  PropelControl/   WPF 发布工具（生成 / 维护发布清单）
+  PropelControl/   发布工具（生成 / 维护发布清单）
   ManifestGen/     清单与启动信息生成器（MakeManifest.exe）
   README.md
   .gitignore
 ```
 
-> 部署产物（编译后的 `dist/`、安装包工程 `Setup/`、辅助脚本 `tools/`、文档 `docs/`）
-> 不纳入本仓库，仅本地保留。
-
 ## 构建
 
-各子工程均为 .NET Framework 4.8（WPF），使用 MSBuild / `dotnet build` 编译：
+各子工程均为 .NET Framework 4.8，使用 MSBuild / `dotnet build` 编译：
 
 ```powershell
 # 客户端（编译后直接产出到 dist/impel）
@@ -96,5 +93,5 @@ dotnet build -c Release ManifestGen/ManifestGen.csproj
 ## 说明
 
 - 哈希缓存使用「大小 + 时间戳 + 首段内容指纹」避免陈旧命中。
-- 客户端之间可通过 P2P 直接分发已装文件，降低中心源压力。
+- 客户端之间可通过 P2P 直接分发已装文件，降低中心源压力，并提高内网下载速度。
 - 本仓库只包含源代码；运行所需二进制请自行构建或取自发布包。
