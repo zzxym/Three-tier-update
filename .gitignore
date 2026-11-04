@@ -1,0 +1,29 @@
+# ---- 构建产物（二进制，可重新生成，不入库）----
+bin/
+obj/
+dist/
+*.user
+*.suo
+*.userprefs
+.vs/
+
+# ---- CodeBuddy 项目数据 ----
+.codebuddy/
+
+# ---- Setup 安装包构建产物 ----
+Setup/*.msi
+Setup/*.wixpdb
+Setup/*.cab
+Setup/.wix/
+
+# ---- 发布临时目录（构建产物）----
+pub_tmp/
+
+# ---- NuGet ----
+packages/
+*.nupkg
+
+# ---- OS / 编辑器 ----
+Thumbs.db
+Desktop.ini
+.DS_Store

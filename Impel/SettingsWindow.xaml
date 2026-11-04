@@ -1,0 +1,68 @@
+﻿<Window x:Class="Impel.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="天一网络三层更新游戏菜单"
+        Width="420" Height="344"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Background="#f3f4f6">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="90"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <Label Grid.Row="0" Grid.Column="0" Content="服务器地址"/>
+        <TextBox Grid.Row="0" Grid.Column="1" x:Name="TxtHost" Margin="0,2"
+                 ToolTip="支持 gameserver、http://gameserver、https://gameserver、https://gameserver:8080（主机名默认 80 端口）"/>
+
+        <Label Grid.Row="1" Grid.Column="0" Content="授权码"/>
+        <TextBox Grid.Row="1" Grid.Column="1" x:Name="TxtToken" Margin="0,2"/>
+
+        <Label Grid.Row="2" Grid.Column="0" Content="软件根目录"/>
+        <DockPanel Grid.Row="2" Grid.Column="1" Margin="0,2">
+            <Button x:Name="BtnBrowseRoot" Content="..." Width="28" DockPanel.Dock="Right"
+                    Margin="6,0,0,0" Click="BtnBrowseRoot_Click" ToolTip="浏览选择软件根目录"/>
+            <TextBox x:Name="TxtRoot"/>
+        </DockPanel>
+
+        <Label Grid.Row="3" Grid.Column="0" Content="下载进程数"/>
+        <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+            <TextBox x:Name="TxtParallel" Width="36" VerticalContentAlignment="Center"
+                     HorizontalContentAlignment="Center"/>
+            <Label Content="文件阈值" Margin="18,0,0,0"/>
+            <TextBox x:Name="TxtSmallTh" Width="58" VerticalContentAlignment="Center"
+                     HorizontalContentAlignment="Center"/>
+            <TextBlock Text="KB" VerticalAlignment="Center" Margin="6,0,0,0"/>
+        </StackPanel>
+
+        <CheckBox Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2"
+                  x:Name="ChkTopmost" Margin="0,4"
+                  Content="窗口置顶（始终在最前显示）"/>
+
+        <CheckBox Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2"
+                  x:Name="ChkLogging" Margin="0,4"
+                  Content="启用日志（写入 impel.log，默认关闭）"/>
+
+        <CheckBox Grid.Row="6" Grid.Column="0" Grid.ColumnSpan="2"
+                  x:Name="ChkAutostart" Margin="0,4"
+                  Content="开机自动启动"/>
+
+        <StackPanel Grid.Row="8" Grid.Column="0" Grid.ColumnSpan="2"
+                    Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom">
+            <Button x:Name="BtnSave" Content="保存" Width="80" Height="28" Margin="0,0,8,0" Click="BtnSave_Click"/>
+            <Button x:Name="BtnCancel" Content="取消" Width="80" Height="28" Click="BtnCancel_Click"/>
+        </StackPanel>
+    </Grid>
+</Window>

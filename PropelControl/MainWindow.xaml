@@ -1,0 +1,164 @@
+﻿<Window x:Class="PropelControl.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="天一网络三层更新源服务器" Width="660" Height="700" MinHeight="480" MinWidth="560"
+        WindowStartupLocation="CenterScreen" ResizeMode="CanResize"
+        FontFamily="Microsoft YaHei, 微软雅黑" FontSize="13"
+        Background="#EFF3F9">
+    <Window.Resources>
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="Padding" Value="18"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Effect">
+                <Setter.Value>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="2" Opacity="0.12" Color="#1B2A4A"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="CardTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="#1F2D3D"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+        </Style>
+
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="#52607A"/>
+        </Style>
+
+        <Style x:Key="Txt" TargetType="TextBox">
+            <Setter Property="Height" Value="30"/>
+            <Setter Property="Padding" Value="8,3"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="BorderBrush" Value="#D7DEEA"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Background" Value="#FBFCFE"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6">
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="4,2"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="BtnBase" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Padding" Value="14,8"/>
+            <Setter Property="MinWidth" Value="112"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="8"
+                                BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Opacity" Value="0.88"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="bd" Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="BtnPrimary" TargetType="Button" BasedOn="{StaticResource BtnBase}">
+            <Setter Property="Background" Value="#3478F6"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+
+        <Style x:Key="BtnSec" TargetType="Button" BasedOn="{StaticResource BtnBase}">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="Foreground" Value="#2B3A55"/>
+            <Setter Property="BorderBrush" Value="#D4DCEC"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+
+        <Style x:Key="LogBox" TargetType="TextBox">
+            <Setter Property="IsReadOnly" Value="True"/>
+            <Setter Property="Background" Value="#1E2230"/>
+            <Setter Property="Foreground" Value="#C9D4E6"/>
+            <Setter Property="FontFamily" Value="Consolas, Microsoft YaHei"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="10"/>
+            <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="BorderThickness" Value="0"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <!-- 分发服务器参数 -->
+        <Border Grid.Row="0" Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="分发服务器参数" Style="{StaticResource CardTitle}"/>
+                        <Grid Margin="0,6,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="发布根目录 root" Style="{StaticResource FieldLabel}" Margin="0,0,12,0"/>
+                            <TextBox Grid.Row="0" Grid.Column="1" x:Name="txtRoot" Text="d:\soft" Style="{StaticResource Txt}"/>
+                            <Button Grid.Row="0" Grid.Column="2" x:Name="btnBrowseRoot" Content="浏览..." Style="{StaticResource BtnSec}" Margin="10,0,0,0" Click="BtnBrowseRoot_Click"/>
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="监听 addr" Style="{StaticResource FieldLabel}" Margin="0,12,12,0"/>
+                            <TextBox Grid.Row="1" Grid.Column="1" x:Name="txtAddr" Text="80" Style="{StaticResource Txt}" Margin="0,12,0,0"/>
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="鉴权 tokens" Style="{StaticResource FieldLabel}" Margin="0,12,12,0"/>
+                            <TextBox Grid.Row="2" Grid.Column="1" x:Name="txtTokens" Text="tywl" Style="{StaticResource Txt}" Margin="0,12,0,0"/>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- 服务管理 -->
+                <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,16,0,0">
+                    <StackPanel>
+                        <TextBlock Text="服务管理" Style="{StaticResource CardTitle}"/>
+                        <WrapPanel Margin="0,10,0,0">
+                            <Button x:Name="btnManage" Content="软件管理" Style="{StaticResource BtnSec}" Click="BtnManage_Click"/>
+                            <Button x:Name="btnSave" Content="保存配置" Style="{StaticResource BtnSec}" Margin="12,0,0,0" Click="BtnSave_Click"/>
+                            <Button x:Name="btnInstall" Content="安装服务" Style="{StaticResource BtnSec}" Margin="12,0,0,0" Click="BtnInstall_Click"/>
+                            <Button x:Name="btnStart" Content="启动服务" Style="{StaticResource BtnSec}" Margin="12,0,0,0" Click="BtnStart_Click"/>
+                        </WrapPanel>
+                        <TextBlock Text="提示：安装/卸载、启动/停止按钮会根据当前服务状态自动切换文字；状态变化会输出到下方日志。" Foreground="#8A94A6" FontSize="11" Margin="0,10,0,0"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- 运行日志 -->
+                <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,16,0,0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="运行日志" Style="{StaticResource CardTitle}"/>
+                        <TextBox Grid.Row="1" x:Name="txtLog" Style="{StaticResource LogBox}" Margin="0,8,0,0"/>
+                    </Grid>
+                </Border>
+    </Grid>
+</Window>

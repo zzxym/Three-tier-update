@@ -1,0 +1,31 @@
+﻿<Window x:Class="Impel.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Impel三层更新游戏菜单客户端"
+        Background="Transparent"
+        AllowsTransparency="True"
+        WindowStyle="None"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        SizeToContent="WidthAndHeight"
+        SnapsToDevicePixels="True"
+        MouseLeftButtonDown="Win_MouseLeftButtonDown"
+        MouseMove="Win_MouseMove">
+
+    <!-- 无底板：只有一排图标，直接浮在桌面上。上下/左右留白用于容纳图标点击放大（1.6×），避免被窗口边界裁切 -->
+    <Border x:Name="Card"
+            Background="Transparent"
+            Padding="32,64,32,4">
+        <Border.ContextMenu>
+            <ContextMenu Opened="Ctx_Opened" Closed="Ctx_Closed">
+                <MenuItem Header="设置" Click="Ctx_Settings"/>
+                <MenuItem Header="退出" Click="Ctx_Exit"/>
+            </ContextMenu>
+        </Border.ContextMenu>
+
+        <StackPanel x:Name="DockPanel"
+                    Orientation="Horizontal"
+                    VerticalAlignment="Center"
+                    HorizontalAlignment="Center"/>
+    </Border>
+</Window>

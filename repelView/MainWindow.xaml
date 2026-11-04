@@ -1,0 +1,136 @@
+<Window x:Class="RepelView.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="天一网络三层更新状态监控" Width="940" Height="780" MinWidth="760" MinHeight="520"
+        WindowStartupLocation="CenterScreen" ResizeMode="CanResize" WindowState="Maximized"
+        FontFamily="Microsoft YaHei, 微软雅黑" FontSize="13"
+        Background="#EFF3F9">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*" MinHeight="260"/>
+            <RowDefinition Height="140"/>
+        </Grid.RowDefinitions>
+
+        <!-- 上方三个并排模块：Repel 服务 / 通讯统计 / 上游服务器（连接参数直接读取同目录 repel.json） -->
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Repel 服务 -->
+            <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,6,0">
+                <StackPanel>
+                    <TextBlock Text="Repel 服务" Style="{StaticResource CardTitle}"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,2,10,0">
+                            <TextBlock Text="Repel状态" Style="{StaticResource FieldLabel}"/>
+                            <TextBlock x:Name="runState" Text="失败" Foreground="#C83C3C" FontWeight="Bold" Style="{StaticResource StatVal}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="0,2,10,0">
+                            <TextBlock Text="缓存目录" Style="{StaticResource FieldLabel}"/>
+                            <TextBlock x:Name="runCache" Text="-" Style="{StaticResource Stat}" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="运行时间" Style="{StaticResource FieldLabel}"/>
+                            <TextBlock x:Name="runUptime" Text="-" Style="{StaticResource StatVal}"/>
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- 上游服务器 -->
+            <Border Grid.Column="1" Style="{StaticResource Card}" Margin="6,0">
+                <StackPanel>
+                    <TextBlock Text="上游服务器" Style="{StaticResource CardTitle}"/>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,2,10,0">
+                            <TextBlock Text="连接状态" Style="{StaticResource FieldLabel}"/>
+                            <TextBlock x:Name="runConn" Text="失败" Foreground="#C83C3C" FontWeight="Bold" Style="{StaticResource StatVal}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="0,2,10,0">
+                            <TextBlock Text="同步状态" Style="{StaticResource FieldLabel}"/>
+                            <Border x:Name="badgePropel" Background="#E6F6EA" CornerRadius="6" Padding="8,2" HorizontalAlignment="Left" VerticalAlignment="Center">
+                                <TextBlock x:Name="runPropelStatus" Text="未知" Foreground="#2E9E44" FontWeight="Bold"/>
+                            </Border>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="最近同步" Style="{StaticResource FieldLabel}"/>
+                            <TextBlock x:Name="runPropelTime" Text="-" Style="{StaticResource Stat}" FontSize="12" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- 通讯统计 -->
+            <Border Grid.Column="2" Style="{StaticResource Card}" Margin="6,0,0,0">
+                <StackPanel>
+                    <TextBlock Text="通讯统计" Style="{StaticResource CardTitle}"/>
+                    <WrapPanel Margin="0,2,0,0">
+                        <StackPanel Margin="0,0,20,0"><TextBlock Text="注册" Style="{StaticResource FieldLabel}"/><TextBlock x:Name="stReg" Text="0" Style="{StaticResource StatVal}"/></StackPanel>
+                        <StackPanel Margin="0,0,20,0"><TextBlock Text="查询" Style="{StaticResource FieldLabel}"/><TextBlock x:Name="stQry" Text="0" Style="{StaticResource StatVal}"/></StackPanel>
+                        <StackPanel><TextBlock Text="文件命中" Style="{StaticResource FieldLabel}"/><TextBlock x:Name="stHit" Text="0" Style="{StaticResource StatVal}"/></StackPanel>
+                    </WrapPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- 在线客户端（含正在下载/下载速度） -->
+        <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,16,0,0">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <TextBlock x:Name="lblPeers" Text="在线客户端 (0)" Style="{StaticResource CardTitle}"/>
+                <DataGrid Grid.Row="1" x:Name="dgPeers" AutoGenerateColumns="False" IsReadOnly="True"
+                          GridLinesVisibility="Horizontal" HeadersVisibility="Column"
+                          BorderThickness="0" Background="Transparent" RowHeight="30"
+                          HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="客户端" Binding="{Binding providerUrl}" Width="220"/>
+                        <DataGridTextColumn Header="应用数" Binding="{Binding AppsText}" Width="70"/>
+                        <DataGridTextColumn Header="哈希数" Binding="{Binding HashesText}" Width="70"/>
+                        <!-- 正在下载占满剩余宽度：同时下载多个应用时名称较长 -->
+                        <DataGridTextColumn Header="正在下载" Binding="{Binding Downloading}" Width="*"/>
+                        <DataGridTextColumn Header="下载速度" Binding="{Binding SpeedText}" Width="90"/>
+                        <DataGridTemplateColumn Header="状态" Width="80">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding online, Converter={StaticResource OnlineText}}"
+                                               Foreground="{Binding online, Converter={StaticResource OnlineBrush}}"
+                                               FontWeight="Bold" VerticalAlignment="Center"/>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTextColumn Header="最新上报" Binding="{Binding LastSeenDisplay}" Width="160"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </Border>
+
+        <!-- 实时日志 -->
+        <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,16,0,0">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <TextBlock Text="运行日志 (repel.log)" Style="{StaticResource CardTitle}"/>
+                <TextBox Grid.Row="1" x:Name="txtLog" Style="{StaticResource LogBox}" Margin="0,8,0,0" VerticalAlignment="Stretch"/>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

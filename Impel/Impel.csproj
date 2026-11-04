@@ -1,0 +1,43 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>impel</AssemblyName>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <RootNamespace>Impel</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <OutputPath>..\dist\impel\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <StartupObject>Impel.App</StartupObject>
+    <AssemblyTitle>天一网络三层更新菜单</AssemblyTitle>
+    <Product>天一网络三层更新</Product>
+    <Company>漳州市天一网络</Company>
+    <Copyright>Copyright © 漳州市天一网络</Copyright>
+    <FileVersion>4.1.0</FileVersion>
+    <InformationalVersion>26.1.0</InformationalVersion>
+    <Version>26.1.0</Version>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="Microsoft.CSharp" />
+  </ItemGroup>
+
+  <!-- 部署精简：不保留 pdb 与自动生成的 .exe.config（仅 supportedRuntime 声明，net48 非必需），构建后删除 -->
+  <Target Name="TrimOutput" AfterTargets="Build">
+    <ItemGroup>
+      <_PdbFiles Include="$(OutDir)*.pdb" />
+    </ItemGroup>
+    <Delete Files="@(_PdbFiles)" />
+    <Delete Files="$(OutDir)$(TargetFileName).config" Condition="Exists('$(OutDir)$(TargetFileName).config')" />
+  </Target>
+
+</Project>

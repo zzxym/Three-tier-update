@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>repelView</AssemblyName>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <RootNamespace>RepelView</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyTitle>天一网络三层更新-状态监控</AssemblyTitle>
+    <Product>天一网络三层更新</Product>
+    <Company>漳州市天一网络</Company>
+    <Copyright>Copyright © 漳州市天一网络</Copyright>
+    <FileVersion>4.1.0</FileVersion>
+    <InformationalVersion>26.1.0</InformationalVersion>
+    <Version>26.1.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 编译期引用 Newtonsoft.Json；运行时与 RepelControl 共用同目录的 Repel.dll（见 App 中的 AssemblyResolve） -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+
+
+
+</Project>

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>PropelService</AssemblyName>
+    <RootNamespace>PropelService</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <AssemblyTitle>天一网络三层更新-Propel源服务</AssemblyTitle>
+    <Product>天一网络三层更新</Product>
+    <Company>漳州市天一网络</Company>
+    <Copyright>Copyright © 漳州市天一网络</Copyright>
+    <FileVersion>4.1.0</FileVersion>
+    <InformationalVersion>26.1.0</InformationalVersion>
+    <Version>26.1.0</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <Reference Include="System.ServiceProcess" />
+  </ItemGroup>
+</Project>
