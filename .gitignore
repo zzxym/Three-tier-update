@@ -10,11 +10,10 @@ dist/
 # ---- CodeBuddy 项目数据 ----
 .codebuddy/
 
-# ---- Setup 安装包构建产物 ----
-Setup/*.msi
-Setup/*.wixpdb
-Setup/*.cab
-Setup/.wix/
+# ---- 不纳入仓库（本地辅助目录，仅本地保留）----
+Setup/
+tools/
+docs/
 
 # ---- 发布临时目录（构建产物）----
 pub_tmp/

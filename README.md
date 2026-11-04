@@ -1,59 +1,82 @@
-# 软件管理菜单与对比更新服务（MenuClient）
+# 软件管理菜单与三层对比更新系统（MenuClient）
 
-一个用于内网环境的绿色软件集中启动 + 版本比对/差异更新/损坏修复系统。
-客户端为 Go + Wails 悬浮窗，服务端为 Go HTTP（总服务器 + 分支穿透缓存）。
+一个用于内网环境的绿色软件集中启动 + 版本比对 / 差异更新 / 损坏修复系统。
+采用 **C# / .NET Framework 4.8（WPF）** 实现，非 Go / Wails。
 
-## 目录结构
+## 三层架构
+
+```
+Propel（中心源 / 发布源）  ──►  Repel（分支 / 缓存 / P2P 注册）  ──►  Impel（客户端）
+```
+
+- **第 1 层 · 源（Propel）**：`PropelService` 提供发布源 HTTP 服务，对外暴露 `all.lst`
+  应用清单与文件下载（支持分片续传），并以 token 做租户鉴权。配套 `PropelControl`（发布工具）
+  与 `ManifestGen`（清单 / 启动信息生成器 `MakeManifest.exe`）。
+- **第 2 层 · 分支 / 缓存（Repel）**：`RepelService` 回源 Propel 并做磁盘缓存，
+  同时提供 peer 注册与查询，让客户端之间走 P2P 就近分发；`RepelControl` 用于维护
+  注册表（`repel.lst`）。
+- **第 3 层 · 客户端（Impel）**：`Impel` 是 WPF 桌面客户端，悬浮坞式启动菜单，
+  内置更新引擎（manifest 比对 / 差异下载 / sha256 校验 / 损坏修复）与 P2P 提供端
+  （把已装文件共享给同网段其他客户端）。
+
+## 目录结构（仓库源码）
+
 ```
 MenuClient/
-  main.go                # 入口：单实例、WebView2 预检、Wails 悬浮窗、前端绑定
-  config/                # 配置类型 + 加载/保存 + 启动逻辑（便携数据重定向）
-  update/                # 更新引擎：manifest 比对/下载/哈希校验/回退/原子切换/修复
-  server/                # 服务端：总服务器(origin) + 分支(branch) + 清单生成(genman)
-  frontend/              # 悬浮 UI（index.html/style.css/main.js）+ dist（构建嵌入）
-  scripts/               # 辅助脚本（genmanifest.ps1 生成本地基线）
-  apps.example.json      # 客户端配置样例
-  webview2/              # 放置自带的 WebView2 安装包/本地运行时（可选）
-  docs/                  # 开发需求表 / 计划表 / 日志
+  Impel/           WPF 客户端：悬浮坞、更新引擎、P2P 提供端、配置、图标、启动器、设置
+  RepelService/    HTTP P2P 注册 / 缓存服务（回源 Propel 并磁盘缓存，提供 peer 查询）
+  RepelControl/    WPF 管控台（维护 repel.lst 注册表）
+  repelView/       WPF 查看器（查看分发清单 / 缓存状态）
+  PropelService/   发布源 HTTP 服务（中心源：all.lst + 文件下载 + 令牌鉴权）
+  PropelControl/   WPF 发布工具（生成 / 维护发布清单）
+  ManifestGen/     清单与启动信息生成器（MakeManifest.exe）
+  README.md
+  .gitignore
 ```
 
-## 客户端构建
+> 部署产物（编译后的 `dist/`、安装包工程 `Setup/`、辅助脚本 `tools/`、文档 `docs/`）
+> 不纳入本仓库，仅本地保留。
+
+## 构建
+
+各子工程均为 .NET Framework 4.8（WPF），使用 MSBuild / `dotnet build` 编译：
+
 ```powershell
-cd MenuClient
-powershell -ExecutionPolicy Bypass -File scripts\build.ps1
-# 脚本会先把 frontend\{index.html,style.css,main.js} 复制到 frontend\dist（Wails 嵌入源），
-# 再执行 wails build 产出单文件 build\bin\MenuClient.exe
+# 客户端（编译后直接产出到 dist/impel）
+dotnet build -c Release Impel/Impel.csproj
+
+# 服务端与工具
+dotnet build -c Release RepelService/RepelService.csproj
+dotnet build -c Release PropelService/PropelService.csproj
+dotnet build -c Release RepelControl/RepelControl.csproj
+dotnet build -c Release PropelControl/PropelControl.csproj
+dotnet build -c Release repelView/repelView.csproj
+dotnet build -c Release ManifestGen/ManifestGen.csproj
 ```
-- **WebView2 运行时有两种随包方式（二选一即可）：**
-  1. **Fixed-Version 本地运行时（推荐，免安装/免管理员/免联网）**：把从微软下载的 Fixed Version 包解压，将其中的 `WebView2Loader.dll` 与 `runtimes\` 放到 `webview2/fixed\` 下，菜单启动时会直接加载本地运行时。
-  2. **Evergreen 引导安装包（兜底）**：把 `MicrosoftEdgeWebview2Setup.exe` 放到 `webview2\` 下，首次运行若系统未装 WebView2 会自动尝试静默安装（需联网、通常需管理员）。
-- 优先级：本地 Fixed 运行时 > Evergreen 引导安装 > 系统已装运行时。
 
-## 客户端配置（MenuClient.json）
-由菜单「设置」界面可视化编辑并落盘，字段见 `apps.example.json`：
-- 全局：`tenant` / `servers`（分支优先→总服务器回退）/ `updateIntervalMinutes` / `dock` / `autostart`
-- 每个软件：启动规格 `exe` `workdir` `env` `args` `process` + `portableData` `dataDir`
+`dist/` 是最终部署布局（含 `impel/`、`repel/`、`propel/` 等可执行目录），由各工程
+`bin\Release\net48` 产出归集而来，属构建产物，不入库。
 
-## 服务端运行
-```bash
-# 总服务器：发布目录 + 租户授权
-go run ./server -mode=origin -root=releases -addr=:8080 -tokens=school-xxx:SECRET
+## 配置与运行
 
-# 分支服务器：穿透缓存代理（回源总服务器并磁盘缓存）
-go run ./server -mode=branch -origin=http://总服务器:8080 -addr=:8080 -cache=branchcache -tokens=school-xxx:SECRET
+- **PropelService（中心源）**：由同目录 `propel.json` 配置发布根目录、监听地址与令牌；
+  对外提供 `/all.lst` 与文件下载。
+- **RepelService（分支 / 缓存）**：由 `repel.json` 配置回源地址（Source = Propel）、
+  监听端口与令牌；为客户端提供 `all.lst` / `repel.lst` 与文件下载 / 缓存，并维护 P2P 候选。
+- **Impel（客户端）**：由 `Impel.json` 配置服务器地址 / 令牌、`softwareRoot`（安装根目录）、
+  悬浮坞与自启动；「设置」界面可可视化编辑。
 
-# 生成发布清单（对每个绿色包运行一次）
-go run ./server -mode=genman -app=<绿色包目录> -tenant=school-xxx -appid=EasiNote -version=5.2.4.11582 -out=releases
-```
-发布目录布局：`releases/<tenant>/<appid>/manifest.json` 与文件。
+三者均通过 **token 租户鉴权**，未配置令牌时默认为空（部署时必须填写，避免共享密钥泄露）。
 
 ## 更新流程
-1. 菜单后台定时（或打开时）对每个未运行软件拉取服务器 manifest。
-2. 按有序服务器列表回退获取；逐文件 sha256 比对，缺的/不一致的下载。
-3. 下载到 `App.staging` 校验通过后，原子切换 `App`（只动 App\，不碰 Data\）。
-4. 若软件在更新中启动 → 放弃本次更新，保留旧版本（用户不受影响）。
-5. 本地文件损坏（哈希不符）→ 自动重新下载修复。
 
-## 绿色包适配
-三个绿色包已写入本地 `manifest.json` 基线（版本 + 文件哈希），作为权威本地版本与修复基线。
-菜单启动它们不再依赖 `启动.bat/vbs`，全部由 `apps.json` 启动规格驱动。
+1. Impel 定时（或打开菜单时）经 Repel（或直接连 Propel）拉取 `all.lst`，得到应用列表与版本。
+2. 对每个应用逐文件 `sha256` 比对，缺失 / 不一致的从 Repel（P2P 或回源 Propel）下载。
+3. **全部文件下载成功**才落盘 `manifest.json` 并记录已装版本；部分失败不误报「已最新」。
+4. 软件正在运行时跳过更新；本地文件损坏（哈希不符）自动重新下载修复。
+
+## 说明
+
+- 哈希缓存使用「大小 + 时间戳 + 首段内容指纹」避免陈旧命中。
+- 客户端之间可通过 P2P 直接分发已装文件，降低中心源压力。
+- 本仓库只包含源代码；运行所需二进制请自行构建或取自发布包。
