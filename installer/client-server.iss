@@ -28,17 +28,17 @@ Name: "chs"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [Files]
 ; —— 客户端（Impel 端）——
-Source: "..\stage\impel\*"; DestDir: "{app}\impel"; Check: IsClient; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\stage\impel\*"; DestDir: "{localappdata}\Impel"; Check: IsClient; Flags: ignoreversion recursesubdirs createallsubdirs
 ; —— 局域网服务端（Repel 端）：RepelService + RepelControl + repelView ——
 Source: "..\stage\repel\*"; DestDir: "{app}\repel"; Check: IsServer; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 ; 开始菜单（按组件二选一）
-Name: "{group}\天一软件菜单"; Filename: "{app}\impel\impel.exe"; Check: IsClient
+Name: "{group}\天一软件菜单"; Filename: "{localappdata}\Impel\impel.exe"; Check: IsClient
 Name: "{group}\天一缓存服务器"; Filename: "{app}\repel\RepelControl.exe"; Check: IsServer
 Name: "{group}\天一更新查看器"; Filename: "{app}\repel\repelView.exe"; Check: IsServer
 ; 桌面快捷方式（按组件二选一，使用指定名称）
-Name: "{autodesktop}\天一软件菜单"; Filename: "{app}\impel\impel.exe"; Check: IsClient
+Name: "{autodesktop}\天一软件菜单"; Filename: "{localappdata}\Impel\impel.exe"; Check: IsClient
 Name: "{autodesktop}\天一缓存服务器"; Filename: "{app}\repel\RepelControl.exe"; Check: IsServer
 Name: "{autodesktop}\天一更新查看器"; Filename: "{app}\repel\repelView.exe"; Check: IsServer
 
@@ -68,4 +68,12 @@ end;
 function IsServer(): Boolean;
 begin
   Result := ModePage.Values[1];
+end;
+
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := False;
+  // 客户端固定安装到 %LOCALAPPDATA%\Impel，无需再让用户选择 Program Files 目标目录
+  if (PageID = wpSelectDir) and IsClient() then
+    Result := True;
 end;
