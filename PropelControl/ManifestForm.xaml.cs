@@ -286,15 +286,17 @@ namespace PropelControl
                 { Log("请先浏览/填写 软件目录与应用ID（版本由 version.txt 自动读取）"); return; }
 
                 Log("开始扫描：" + scan);
+                Log("提示：生成前请先完全退出被打包的应用（尤其 Chrome 等使用 LevelDB 的程序），否则设置数据可能抓到不一致快照。");
                 ExtractIcon(scan);
                 var files = new List<Dictionary<string, object>>();
                 long total = 0;
+                int seedCount = 0;
                 await Task.Run(() =>
                 {
                     foreach (var f in SafeWalk(scan))
                     {
                         var rel = f.Substring(scan.Length).TrimStart('\\').Replace('\\', '/');
-                        if (IsIgnoredForManifest(rel)) continue; // 排除旧清单及日志/临时/缓存等运行时文件
+                        if (IsIgnoredForManifest(rel)) continue; // 排除运行时垃圾与客户端自维护文件
                         var fi = new FileInfo(f);
                         var sha = Sha256File(f);
                         var entry = new Dictionary<string, object>
@@ -303,6 +305,9 @@ namespace PropelControl
                             ["size"] = fi.Length.ToString(),
                             ["sha256"] = sha
                         };
+                        // 用户设置/状态：首次安装必须下发，但应用运行会改写 → 标 seed，
+                        // 客户端仅在本地缺失时下载、不比哈希、不覆盖（保留用户后续设置）。
+                        if (IsSeedFile(rel)) { entry["seed"] = true; seedCount++; }
                         lock (files) { files.Add(entry); total += fi.Length; }
                         Log($"  {rel}  ({fi.Length} bytes)");
                     }
@@ -316,34 +321,98 @@ namespace PropelControl
                 };
                 var outPath = Path.Combine(scan, "manifest.json");
                 File.WriteAllText(outPath, JsonConvert.SerializeObject(manifest, Formatting.Indented));
-                Log($"完成：appid={appid}，{files.Count} 个文件，共 {total} bytes");
+                Log($"完成：appid={appid}，{files.Count} 个文件（其中 seed 种子数据 {seedCount} 个），共 {total} bytes");
                 Log("已写入：" + outPath);
             }
             catch (Exception ex) { Log("错误：" + ex.Message); }
             finally { btnGen.IsEnabled = true; }
         }
 
-        // 生成清单时跳过的文件/目录：运行时生成或无关文件不应进入分发清单，
-        // 否则应用运行后改写它们（如日志）会导致哈希变化、客户端反复误判“需更新”。
+        // 生成端是分发策略的唯一决策点：客户端只按清单执行，不再二次按路径过滤。
+        // 这里仅排除「确定无分发价值的运行时垃圾」与「客户端自维护文件」。
+        // 注意：LevelDB 的纯数字 .log(WAL) / .ldb(SST) / CURRENT / MANIFEST-* 是真实数据
+        // （扩展设置就存在这里），必须放行并标 seed，见 IsSeedFile。
         private static bool IsIgnoredForManifest(string rel)
         {
-            var lower = rel.ToLowerInvariant();
-            if (lower.EndsWith(".log") || lower.EndsWith(".tmp") || lower.EndsWith(".bak") || lower.EndsWith(".old"))
+            var p = rel.Replace('\\', '/');
+            var lower = p.ToLowerInvariant();
+            var name = Path.GetFileName(p);
+
+            // 仅应用根目录的两个自维护文件；子目录同名文件（如扩展自带 manifest.json）是程序数据，必须分发
+            if (p.IndexOf('/') < 0 &&
+                (name.Equals("manifest.json", StringComparison.OrdinalIgnoreCase)
+                 || name.Equals("app.json", StringComparison.OrdinalIgnoreCase)))
                 return true;
-            var name = Path.GetFileName(rel);
-            if (name.Equals("manifest.json", StringComparison.OrdinalIgnoreCase)
-                || name.Equals("app.json", StringComparison.OrdinalIgnoreCase)   // 客户端元数据（Impel 端 CacheAppList 维护），不入分发清单
-                || name.Equals("thumbs.db", StringComparison.OrdinalIgnoreCase)
+            if (name.Equals("thumbs.db", StringComparison.OrdinalIgnoreCase)
                 || name.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase))
                 return true;
-            foreach (var seg in rel.Split('/'))
+
+            // LevelDB 诊断日志 / 锁文件、SQLite 回滚日志、临时与备份文件：无数据价值且运行时改写
+            if (name.Equals("LOG", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("LOG.old", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("LOCK", StringComparison.OrdinalIgnoreCase)
+                || lower.EndsWith("-journal") || lower.EndsWith("-wal") || lower.EndsWith("-shm")
+                || lower.EndsWith(".tmp") || lower.EndsWith(".bak") || lower.EndsWith(".old"))
+                return true;
+
+            // 仅排除真正的文本日志；纯数字命名的 .log 是 LevelDB WAL（数据），放行
+            if (lower.EndsWith(".log") && !HasNumericStem(name)) return true;
+
+            // 缓存 / 临时 / 会话等运行时目录（按路径段，大小写不敏感）
+            foreach (var seg in p.Split('/'))
             {
                 var s = seg.ToLowerInvariant();
                 if (s == "logs" || s == "log" || s == "cache" || s == "caches" || s == "temp" || s == "tmp"
-                    || s == "app.staging" || s == "__pycache__" || s == ".git" || s == "node_modules")
+                    || s == "app.staging" || s == "__pycache__" || s == ".git" || s == "node_modules"
+                    || s == "code cache" || s == "gpucache" || s == "shadercache" || s == "grshadercache"
+                    || s == "dawnwebgpucache" || s == "dawngraphitecache" || s == "scriptcache"
+                    || s == "manifest resources" || s == "crashpad" || s == "browsermetrics"
+                    || s == "sessions" || s == "sessions_encrypted" || s == "session storage"
+                    || s == "component_crx_cache" || s == "extensions_crx_cache")
                     return true;
             }
             return false;
+        }
+
+        private static bool HasNumericStem(string name)
+        {
+            var stem = Path.GetFileNameWithoutExtension(name);
+            return stem.Length > 0 && stem.All(char.IsDigit);
+        }
+
+        // 用户设置/状态所在目录：整目录视为种子数据（会被应用运行时改写）
+        private static readonly HashSet<string> SeedDirSegments = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Local Extension Settings", "Sync Extension Settings", "Managed Extension Settings",
+            "Extension State", "Extension Rules", "Extension Scripts",
+            "IndexedDB", "Local Storage", "Sync Data", "shared_proto_db", "WebStorage",
+            "Service Worker", "Network", "Site Characteristics Database", "Segmentation Platform"
+        };
+        // 顶层用户配置文件（无扩展名，运行时会被改写）
+        private static readonly HashSet<string> SeedFileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "Preferences", "Secure Preferences", "Local State", "Web Data", "Bookmarks",
+            "Login Data", "History", "Network Persistent State", "TransportSecurity", "Trust Tokens"
+        };
+
+        /// <summary>种子数据：应用运行会改写，但首次安装必须从发布源带来的用户设置/状态。
+        /// 客户端仅在本地缺失时下载、不参与哈希比对、不覆盖已有文件（保留用户后续设置）。
+        /// 命中范围：LevelDB 数据文件与元数据、设置目录、顶层用户配置文件。</summary>
+        private static bool IsSeedFile(string rel)
+        {
+            var p = rel.Replace('\\', '/');
+            var name = Path.GetFileName(p);
+            var lower = p.ToLowerInvariant();
+            // ① LevelDB 的 WAL / SST：纯数字命名的 .log / .ldb，无论位于哪个目录都是数据文件
+            if ((lower.EndsWith(".log") || lower.EndsWith(".ldb")) && HasNumericStem(name)) return true;
+            // ② LevelDB 一致性元数据（必须与 WAL 一同下发，否则库打不开）
+            if (name.Equals("CURRENT", StringComparison.OrdinalIgnoreCase)
+                || name.StartsWith("MANIFEST-", StringComparison.OrdinalIgnoreCase)) return true;
+            // ③ 设置 / 状态目录
+            foreach (var seg in p.Split('/'))
+                if (SeedDirSegments.Contains(seg)) return true;
+            // ④ 顶层用户配置文件
+            return SeedFileNames.Contains(name);
         }
 
         private static IEnumerable<string> SafeWalk(string root)

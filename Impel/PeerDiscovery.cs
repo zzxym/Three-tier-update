@@ -75,7 +75,10 @@ namespace Impel
             var hashes = new List<string>();
             foreach (var f in m.files)
             {
-                if (UpdateEngine.IsRuntimeIgnored(f.path)) continue;   // 运行时文件（app.json/*.log 等）不参与共享注册：内容会被应用/客户端改写，注册了也永远校验不上
+                // 客户端自维护文件与 seed 种子数据不参与共享注册：
+                // 前者内容由 Impel 改写、后者每台机器可能不同且会被应用改写，注册了也永远校验不上。
+                // 判据与 UpdateEngine 一致，保证清单即唯一策略源。
+                if (UpdateEngine.IsSelfProtected(f.path) || f.seed) continue;
                 var lp = Path.Combine(root, f.path.Replace('/', '\\'));
                 if (File.Exists(lp) && Utils.Sha256File(lp).Equals(f.sha256, StringComparison.OrdinalIgnoreCase))
                     hashes.Add(f.sha256);
@@ -86,7 +89,8 @@ namespace Impel
                 appId = app.id,
                 version = m.version,
                 hashes = hashes,
-                providerUrl = "http://" + (string.IsNullOrEmpty(cfg.p2p.advertiseIp) ? LocalLanIP(RepelHost(cfg)) : cfg.p2p.advertiseIp.Trim()) + ":" + cfg.p2p.port
+                providerUrl = "http://" + (string.IsNullOrEmpty(cfg.p2p.advertiseIp) ? LocalLanIP(RepelHost(cfg)) : cfg.p2p.advertiseIp.Trim()) + ":" + cfg.p2p.port,
+                host = Environment.MachineName   // 客户端本地计算机名，repelView 显示用
             };
             PostRegister(cfg, body);
         }
@@ -113,12 +117,40 @@ namespace Impel
         /// 这样多台客户端无需再次点击即可在 repelView 上互相可见；哈希有缓存，续期几乎零开销）。</summary>
         public static void RegisterAll(ImpelConfig cfg)
         {
-            if (cfg.apps == null) return;
-            foreach (var a in cfg.apps)
+            if (cfg.apps != null)
+                foreach (var a in cfg.apps)
+                {
+                    if (a == null || string.IsNullOrEmpty(a.id) || !a.enabled) continue;
+                    try { RegisterApp(cfg, a); } catch { }
+                }
+            OnlinePing(cfg);   // 始终上报在线：即便未下载任何应用，也让 repelView 列出本机（覆盖"零 app 客户端不显示"）
+        }
+
+        /// <summary>纯在线上报：即使本地没有任何已装应用，也向 Repel 上报本机 providerUrl，
+        /// 使 repelView 能列出"在线但零 app"的客户端（仅注册已装应用无法覆盖此场景）。</summary>
+        public static void OnlinePing(ImpelConfig cfg)
+        {
+            var providerUrl = "http://" + (string.IsNullOrEmpty(cfg.p2p.advertiseIp) ? LocalLanIP(RepelHost(cfg)) : cfg.p2p.advertiseIp.Trim()) + ":" + cfg.p2p.port;
+            PostOnline(cfg, providerUrl, Environment.MachineName);
+        }
+
+        static void PostOnline(ImpelConfig cfg, string providerUrl, string host)
+        {
+            var url = UpdateEngine.RepelBase(cfg) + "/peer/online";
+            if (!string.IsNullOrEmpty(cfg.server.token)) url += "?token=" + Uri.EscapeDataString(cfg.server.token);
+            try
             {
-                if (a == null || string.IsNullOrEmpty(a.id) || !a.enabled) continue;
-                try { RegisterApp(cfg, a); } catch { }
+                var req = (HttpWebRequest)WebRequest.Create(url);
+                req.Method = "POST";
+                req.ContentType = "application/json";
+                req.Timeout = 8000;
+                var body = new { providerUrl = providerUrl, host = host };
+                var bytes = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(body));
+                req.ContentLength = bytes.Length;
+                using (var s = req.GetRequestStream()) s.Write(bytes, 0, bytes.Length);
+                using (var resp = (HttpWebResponse)req.GetResponse()) { }
             }
+            catch (Exception ex) { Impel.App.Log("在线心跳失败: " + ex.Message); }
         }
 
         public static List<string> QueryPeers(ImpelConfig cfg, string appId, string hash)

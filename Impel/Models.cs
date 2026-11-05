@@ -66,6 +66,12 @@ namespace Impel
         public string size;
         public string sha256;
         public List<BlockEntry> blocks;
+        /// <summary>种子数据标记（由 Propel 清单生成器写入）：应用运行会改写这类文件（扩展设置、
+        /// LevelDB WAL、Preferences 等），但首次安装时必须从发布源同步过来。语义为：
+        /// 仅当本地缺失时下载、不参与哈希比对、不覆盖本地已有文件（保留用户后续设置）。
+        /// 缺省 false，旧清单无此字段时按普通文件处理，向后兼容。</summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool seed = false;
         public long SizeLong => long.TryParse(size, out var v) ? v : 0;
     }
     public class BlockEntry { public long off; public long len; public string sha256; }

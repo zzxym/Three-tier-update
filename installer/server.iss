@@ -27,7 +27,7 @@ Name: "chs"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [Files]
 ; —— 局域网服务端（Repel 端）：RepelService + RepelControl + repelView ——
-Source: "..\stage\repel\*"; DestDir: "{app}\repel"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\stage\repel\*"; DestDir: "{app}\repel"; Excludes: "*.pdb;*.config;*.ico"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 ; 开始菜单

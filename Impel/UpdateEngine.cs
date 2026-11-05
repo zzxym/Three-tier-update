@@ -26,6 +26,10 @@ namespace Impel
         /// <summary>版本不一致全量哈希比对得出的“需更新文件相对路径”集合；
         /// UpdateAsync 复用它避免对同一批文件再算一遍哈希（GB 级应用可省数分钟）。</summary>
         public HashSet<string> needPaths;
+        /// <summary>是否需要一次性下发 seed 种子数据：本地清单尚无 seed 标记（新装或旧清单升级）时为真。
+        /// 补齐后 UpdateAsync 会把含 seed 的新清单写回本地，此标志随即转假，
+        /// 之后应用运行时改写/滚动 WAL 不再触发更新，也不覆盖 Impel 端用户设置。</summary>
+        public bool seedSync;
     }
 
     public static class UpdateEngine
@@ -305,9 +309,16 @@ namespace Impel
                 st.state = local == null ? "未安装" : "已最新";
                 if (err.Contains("404")) st.state += "（服务器无此应用）";
                 else if (!st.state.StartsWith("已最新")) st.state += "（服务器不可达：" + err + "）";
+                // 清单拉取失败必须留痕：此前静默返回，客户端表现为"未找到主程序"却无任何下载日志，无法排障
+                App.Log("[" + app.name + "] 获取清单失败：" + err + "（Repel 与 Propel 均未成功）→ 判定 " + st.state);
                 return st;
             }
             st.remoteVersion = remote.version ?? "";
+            // 一次性 seed 迁移：本地清单不含 seed 标记（全新安装，或从旧版清单升级）时，
+            // 需要把发布源预置的用户设置下发一次。UpdateAsync 成功后会把含 seed 的新清单写回本地，
+            // 此后本标志转假 —— 应用运行时改写/滚动 WAL 不再触发更新，也不覆盖用户设置。
+            st.seedSync = remote.files.Any(f => f.seed)
+                          && (local == null || !local.files.Any(f => f.seed));
 
             // 本地清单缺失：仅当“既无本地清单、也无安装记录”才视为未安装/需全量下载；
             // 若有 installed 记录（Impel.json 已记下版本），即使 manifest.json 被应用误删，也按版本号
@@ -331,11 +342,21 @@ namespace Impel
                 int missing = 0; long missBytes = 0; int chkTotal = 0;
                 foreach (var f in remote.files)
                 {
-                    if (IsRuntimeIgnored(f.path)) continue; // 运行时文件（如日志）不参与比对
+                    // seed 完全不参与比对：应用运行会改写/滚动其文件名（如 LevelDB WAL 改名），
+                    // 纳入存在性检查会把旧文件判缺失并反复触发“可更新”。仅首次安装时下发一次。
+                    if (IsSelfProtected(f.path) || f.seed) continue;
                     chkTotal++;
                     var lp = Path.Combine(root, f.path.Replace('/', '\\'));
                     if (!File.Exists(lp)) { missing++; missBytes += f.SizeLong; }
                 }
+                // seed 迁移窗口内：把缺失的 seed 计入需下载数，让状态能进入 UpdateAsync。
+                // 只查存在性（不比哈希），补齐后写回的新清单带 seed 标记，窗口随即关闭。
+                if (st.seedSync)
+                    foreach (var f in remote.files.Where(x => x.seed))
+                    {
+                        var lp = Path.Combine(root, f.path.Replace('/', '\\'));
+                        if (!File.Exists(lp)) { missing++; missBytes += f.SizeLong; }
+                    }
                 st.filesTotal = chkTotal;
                 st.filesNeed = missing;
                 st.bytesNeed = missBytes;
@@ -343,18 +364,26 @@ namespace Impel
                 return st;
             }
 
-            // 版本不一致：逐文件比对（存在 + 哈希），精准定位真正需要更新的文件。
-            // 运行时文件（如日志）跳过哈希计算，避免应用软件改写日志后误判“需更新”。
+            // 版本不一致：逐文件比对（存在 + sha256），精准定位真正需要更新的程序文件。
+            // seed 种子数据不参与比对：它由应用运行时改写，且只在首次安装时下发，
+            // 纳入哈希比对会让每次版本升级都把发布源的旧设置覆盖回 Impel 端。
             int need = 0; long bytes = 0; int total = 0;
             var np = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var f in remote.files)
             {
-                if (IsRuntimeIgnored(f.path)) continue;
+                if (IsSelfProtected(f.path) || f.seed) continue;
                 total++;
                 var lp = Path.Combine(root, f.path.Replace('/', '\\'));
                 var ok = File.Exists(lp) && Utils.Sha256File(lp).Equals(f.sha256, StringComparison.OrdinalIgnoreCase);
                 if (!ok) { need++; bytes += f.SizeLong; np.Add(f.path); }
             }
+            // seed 迁移窗口内：同样只按存在性补缺，不比哈希、不覆盖已有文件。
+            if (st.seedSync)
+                foreach (var f in remote.files.Where(x => x.seed))
+                {
+                    var lp = Path.Combine(root, f.path.Replace('/', '\\'));
+                    if (!File.Exists(lp)) { need++; bytes += f.SizeLong; np.Add(f.path); }
+                }
             st.filesTotal = total;
             st.filesNeed = need;
             st.bytesNeed = bytes;
@@ -372,28 +401,25 @@ namespace Impel
             catch { return false; }
         }
 
-        /// <summary>更新/校验时跳过的运行时文件：应用运行会改写这些文件（如日志、临时、缓存），
-        /// 若纳入哈希比对会误判“需更新/损坏”，导致每次打开应用都重新下载。
-        /// 规则需与 PropelControl 中清单生成器（ManifestForm）的 IsIgnoredForManifest 保持一致。</summary>
-        internal static bool IsRuntimeIgnored(string rel)
+        /// <summary>客户端自维护文件的固定保护名单：这些文件由 Impel 自己写入或由 Windows 生成，
+        /// 绝不能从服务端清单下载覆盖（否则 app.json 被反复覆盖、manifest.json 覆盖刚写的安装基线）。
+        /// 分发策略由 Propel 的 manifest.json 唯一决定（哪些运行时文件不入清单、哪些是 seed 种子数据），
+        /// 客户端不再按扩展名/目录名二次过滤，避免服务端定制清单失效、也避免两端规则不同步。</summary>
+        internal static bool IsSelfProtected(string rel)
         {
             if (string.IsNullOrEmpty(rel)) return false;
-            var lower = rel.ToLowerInvariant();
-            if (lower.EndsWith(".log") || lower.EndsWith(".tmp") || lower.EndsWith(".bak") || lower.EndsWith(".old"))
+            var p = rel.Replace('\\', '/');
+            var name = Path.GetFileName(p);
+            // 仅应用根目录的这两个文件；子目录同名（扩展自带 manifest.json 等）是程序数据，必须放行
+            if (p.IndexOf('/') < 0 &&
+                (name.Equals("manifest.json", StringComparison.OrdinalIgnoreCase)
+                 || name.Equals("app.json", StringComparison.OrdinalIgnoreCase)))
                 return true;
-            var name = Path.GetFileName(rel.Replace('\\', '/'));
-            if (name.Equals("manifest.json", StringComparison.OrdinalIgnoreCase)
-                || name.Equals("app.json", StringComparison.OrdinalIgnoreCase)   // 客户端元数据（CacheAppList 维护），内容与服务器打包版不同，纳入比对会每次重复下载
-                || name.Equals("thumbs.db", StringComparison.OrdinalIgnoreCase)
+            if (name.Equals("thumbs.db", StringComparison.OrdinalIgnoreCase)
                 || name.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase))
                 return true;
-            foreach (var seg in rel.Replace('\\', '/').Split('/'))
-            {
-                var s = seg.ToLowerInvariant();
-                if (s == "logs" || s == "log" || s == "cache" || s == "caches" || s == "temp" || s == "tmp"
-                    || s == "app.staging" || s == "__pycache__" || s == ".git" || s == "node_modules")
-                    return true;
-            }
+            foreach (var seg in p.Split('/'))
+                if (seg.Equals("App.staging", StringComparison.OrdinalIgnoreCase)) return true;
             return false;
         }
 
@@ -410,13 +436,20 @@ namespace Impel
             try
             {
             var st = Evaluate(cfg, app);
-            if (st.running)
+            // 运行中仅当主程序文件实际存在才跳过更新：IsRunning 按进程名匹配（不含路径），
+            // 同名残留/官方安装版进程会误判为"本应用运行中"；若此时主程序尚未下载（全新安装），
+            // 跳过更新会导致"未下载→启动失败→未找到主程序"。主程序缺失即视为未就绪，照常补齐。
+            string launchExe = "";
+            try { launchExe = Path.Combine(ConfigService.AppRoot(cfg, app), (app.exe ?? "").Replace('/', '\\')); } catch { }
+            if (st.running && (!string.IsNullOrEmpty(app.exe) && File.Exists(launchExe)))
             {
-                // 应用正在运行：文件被占用且随时被改写，更新既无意义也易失败，跳过
+                // 应用正在运行且已就绪：文件被占用且随时被改写，更新既无意义也易失败，跳过
                 progress?.Invoke(new UpdateProgress { doneFiles = 1, totalFiles = 1, currentFile = "运行中", currentTotal = 1, currentBytes = 1 });
                 log("[" + app.name + "] 应用正在运行，跳过更新检查");
                 return st;
             }
+            if (st.running)
+                log("[" + app.name + "] 检测到同名进程但主程序缺失（" + launchExe + "），不跳过更新，继续校验/补齐");
             if (st.state == "已最新" || st.filesNeed == 0)
             {
                 progress?.Invoke(new UpdateProgress { doneFiles = 1, totalFiles = 1, currentFile = "已是最新", currentTotal = 1, currentBytes = 1 });
@@ -433,7 +466,12 @@ namespace Impel
                 { st.state = "可更新"; log("[" + app.name + "] 获取清单失败：" + e2); return st; }
                 if (Directory.Exists(stage)) Directory.Delete(stage, true);
                 Directory.CreateDirectory(stage);
-                var updateFiles = remote.files.Where(f => !IsRuntimeIgnored(f.path)).ToList();
+                // seed 仅在 Evaluate 判定的一次性迁移窗口内纳入下载列表；窗口关闭后
+                // 即便版本升级也不再触碰，避免把发布源预置的旧设置覆盖回 Impel 端用户的实际设置。
+                // 分发策略完全由服务端清单决定：客户端只排除自维护文件，不再按路径二次过滤。
+                var updateFiles = remote.files
+                    .Where(f => !IsSelfProtected(f.path) && (!f.seed || st.seedSync))
+                    .ToList();
                 int total = updateFiles.Count;
                 int done = 0;
                 // 并行下载（路数取自配置 downloadParallel，默认 6）：首次全量安装 GB 级应用时显著提速；
@@ -478,7 +516,11 @@ namespace Impel
                             var tmp = Path.Combine(stage, rel);
                             // needPaths 非空 = Evaluate 已对全量文件做过哈希比对，直接复用结果，不再重复计算
                             bool needDl;
-                            if (st.needPaths != null)
+                            if (f.seed)
+                                // 种子数据独立于 needPaths：只补缺失，本地已有绝不覆盖。
+                                // （Evaluate 已排除 seed，若不单独判断会永远下载不到。）
+                                needDl = !File.Exists(target);
+                            else if (st.needPaths != null)
                                 needDl = st.needPaths.Contains(f.path);
                             else
                             {
@@ -578,7 +620,12 @@ namespace Impel
 
         static bool TryDownloadFrom(ImpelConfig cfg, string baseUrl, string appId, FileEntry f, string destPath, Action<long> onBytes, Action<string> log)
         {
-            var url = baseUrl.TrimEnd('/') + "/" + appId + "/" + f.path.TrimStart('/');
+            // 回源 URL 各路径段单独编码（保留 '/' 作分隔）：seed 设置目录名含空格/中文，
+            // 且文件名可能含 + # % 等特殊字符；与 Propel/Repel 端 Uri.UnescapeDataString 形成闭环。
+            var appIdEnc = Uri.EscapeDataString(appId);
+            var relEnc = string.Join("/", f.path.TrimStart('/').Replace('\\', '/').Split('/')
+                                       .Select(s => Uri.EscapeDataString(s)).ToArray());
+            var url = baseUrl.TrimEnd('/') + "/" + appIdEnc + "/" + relEnc;
             if (!string.IsNullOrEmpty(cfg.server.token)) url += "?token=" + Uri.EscapeDataString(cfg.server.token);
             var sha = SHA256.Create();
             try

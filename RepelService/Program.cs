@@ -23,7 +23,7 @@ namespace RepelService
     /// 启动方式：默认读同目录 repel.json，命令行参数可覆盖；直接运行=前台，作为 Windows 服务运行=后台。
     /// </summary>
     class PeerEntry { public string ProviderUrl; public DateTime ExpireAt; }
-    class RegisterBody { public string appId = null; public string version = null; public List<string> hashes = null; public string providerUrl = null; }
+    class RegisterBody { public string appId = null; public string version = null; public List<string> hashes = null; public string providerUrl = null; public string host = null; }
 
     class RepelConfig
     {
@@ -81,6 +81,13 @@ namespace RepelService
         class IpSpeed { public Dictionary<string, AppSpeed> apps = new(StringComparer.OrdinalIgnoreCase); public DateTime last; }
         static readonly Dictionary<string, IpSpeed> _speeds = new(StringComparer.OrdinalIgnoreCase);
         static readonly object _speedLock = new();
+        // 纯在线上报集合（与 P2P 注册表 Registry 解耦）：客户端即使未下载任何 app 也定时上报 providerUrl，
+        // 使 repelView 能列出"在线但零 app"的客户端。Registry 仅含已装好 app 的客户端，会遗漏刚装机、尚未装好应用的机器。
+        static readonly Dictionary<string, DateTime> _online = new(StringComparer.OrdinalIgnoreCase);
+        static readonly object _onlineLock = new();
+        // providerUrl → 客户端本地计算机名（Online/Register 上报时记录，Diag 显示用）
+        static readonly Dictionary<string, string> _hosts = new(StringComparer.OrdinalIgnoreCase);
+        static readonly TimeSpan OnlineTTL = TimeSpan.FromMinutes(15);   // 在线心跳 15 分钟过期（客户端每 5 分钟上报，留余量）
         class PeerInfo { public string Url; public int HashCount; public HashSet<string> Apps = new(StringComparer.OrdinalIgnoreCase); public DateTime MinExpire = DateTime.MaxValue, MaxExpire = DateTime.MinValue; }
 
         public static void Log(string s)
@@ -265,6 +272,7 @@ namespace RepelService
                 if (path.TrimEnd('/').EndsWith("/peer/register")) { Register(ctx); return; }
                 if (path.TrimEnd('/').EndsWith("/peer/query")) { Query(ctx); return; }
                 if (path.TrimEnd('/').EndsWith("/peer/speed")) { Speed(ctx); return; }
+                if (path.TrimEnd('/').EndsWith("/peer/online")) { Online(ctx); return; }
                 if (path.TrimEnd('/').EndsWith("/diag")) { Diag(ctx); return; }
                 if (path.TrimEnd('/').EndsWith("/probesource")) { await ProbeSourceAsync(ctx); return; }
                 if (path.TrimEnd('/').EndsWith("/changes")) { Interlocked.Increment(ref _changesRequests); await ServeChangesAsync(ctx); return; }
@@ -326,6 +334,7 @@ namespace RepelService
                 var rb = JsonConvert.DeserializeObject<RegisterBody>(r.ReadToEnd());
                 if (rb == null || string.IsNullOrEmpty(rb.appId)) { ctx.Response.StatusCode = 400; return; }
                 if (string.IsNullOrEmpty(rb.providerUrl)) { ctx.Response.StatusCode = 400; return; }   // providerUrl 缺失会导致 Query 拼出空 baseUrl
+                if (!string.IsNullOrEmpty(rb.host)) lock (_onlineLock) _hosts[rb.providerUrl] = rb.host;   // 记录计算机名，供 Diag 显示
                 lock (RegLock)
                 {
                     if (!Registry.ContainsKey(rb.appId)) Registry[rb.appId] = new Dictionary<string, List<PeerEntry>>(StringComparer.OrdinalIgnoreCase);
@@ -341,6 +350,22 @@ namespace RepelService
                 ctx.Response.StatusCode = 200;
                 Interlocked.Increment(ref _registerTotal);
                 // P2P 注册频率高（每客户端每 5 分钟 × 每应用），不写日志，仅计入统计
+            }
+            catch { ctx.Response.StatusCode = 400; }
+        }
+
+        /// <summary>纯在线上报：接收客户端 providerUrl，记录/续期"在线"状态（与 P2P 注册表解耦）。
+        /// 客户端即使未下载任何 app 也定时上报，使 repelView 在线客户端列表不至于遗漏刚装机、尚未装好应用的机器。</summary>
+        static void Online(HttpListenerContext ctx)
+        {
+            try
+            {
+                using var r = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding);
+                var rb = JsonConvert.DeserializeObject<RegisterBody>(r.ReadToEnd());
+                if (rb == null || string.IsNullOrEmpty(rb.providerUrl)) { ctx.Response.StatusCode = 400; return; }
+                lock (_onlineLock) { _online[rb.providerUrl] = DateTime.Now; if (!string.IsNullOrEmpty(rb.host)) _hosts[rb.providerUrl] = rb.host; }
+                ctx.Response.StatusCode = 200;
+                Interlocked.Increment(ref _registerTotal);   // 复用统计：在线上报也计入 registerTotal
             }
             catch { ctx.Response.StatusCode = 400; }
         }
@@ -452,12 +477,15 @@ namespace RepelService
                                 {
                                     var p = ((string)f["path"] ?? "").Replace('\\', '/');
                                     var fn = Path.GetFileName(p);
-                                    // 与客户端忽略规则一致：运行时文件（app.json/*.log 等）不计数，保证与 peer 注册口径可比
-                                    if (fn.Equals("app.json", StringComparison.OrdinalIgnoreCase)
+                                    // 与 Impel 的 P2P 注册口径一致：仅排除客户端自维护文件与 seed 种子数据，
+                                    // 其余完全按清单计数（不再按扩展名二次过滤，避免与 peer 数字不可比）。
+                                    bool isSeed = (bool?)f["seed"] == true;
+                                    bool rootMeta = p.IndexOf('/') < 0 &&
+                                        (fn.Equals("manifest.json", StringComparison.OrdinalIgnoreCase)
+                                         || fn.Equals("app.json", StringComparison.OrdinalIgnoreCase));
+                                    if (isSeed || rootMeta
                                         || fn.Equals("thumbs.db", StringComparison.OrdinalIgnoreCase)
-                                        || fn.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase)
-                                        || p.EndsWith(".log", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)
-                                        || p.EndsWith(".bak", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".old", StringComparison.OrdinalIgnoreCase))
+                                        || fn.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase))
                                         continue;
                                     var h = (string)f["sha256"];
                                     if (!string.IsNullOrEmpty(h)) set.Add(h);
@@ -479,6 +507,18 @@ namespace RepelService
         {
             var now = DateTime.Now;
             var info = new Dictionary<string, PeerInfo>(StringComparer.OrdinalIgnoreCase);
+            // 先纳入纯在线客户端（零 app）：以在线心跳时间戳为过期基准，apps/hashes 暂为 0；
+            // 这样 Repel（或刚装机的客户端）即便未下载任何应用，也会出现在 repelView 的在线客户端列表中。
+            var onlineCutoff = now.Add(-OnlineTTL);
+            lock (_onlineLock)
+                foreach (var kv in _online)
+                    if (kv.Value >= onlineCutoff)
+                    {
+                        var expireAt = kv.Value.Add(OnlineTTL);
+                        if (!info.TryGetValue(kv.Key, out var pi)) { pi = new PeerInfo { Url = kv.Key, MinExpire = DateTime.MaxValue, MaxExpire = expireAt }; info[kv.Key] = pi; }
+                        else if (expireAt > pi.MaxExpire) pi.MaxExpire = expireAt;
+                    }
+            // 再叠加 P2P 注册表：补齐/累加 apps 与 hashes，并以真实注册过期时间覆盖（更准）
             lock (RegLock)
             {
                 foreach (var app in Registry)
@@ -492,9 +532,12 @@ namespace RepelService
                             if (p.ExpireAt > pi.MaxExpire) pi.MaxExpire = p.ExpireAt;
                         }
             }
+            var hostMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            lock (_onlineLock) foreach (var kv in _hosts) hostMap[kv.Key] = kv.Value;
             var peers = info.Values.Select(pi => new
             {
                 providerUrl = pi.Url,
+                host = hostMap.TryGetValue(pi.Url, out var hn) ? hn : "",
                 apps = pi.Apps.Count,
                 hashes = pi.HashCount,
                 lastSeenUtc = (pi.MinExpire == DateTime.MaxValue ? null : pi.MinExpire.AddMinutes(-20).ToUniversalTime().ToString("o")),
@@ -529,6 +572,7 @@ namespace RepelService
             {
                 version = 1,
                 port = Port,
+                selfUrl = string.IsNullOrEmpty(SelfUrl) ? ("http://*:" + Port) : SelfUrl.TrimEnd('/'),
                 source = Source,
                 tokenRequired = Auth.Count > 0,
                 cacheDir = CacheDir,
@@ -835,7 +879,11 @@ namespace RepelService
                 if (!need) continue;
                 try
                 {
-                    var data = await WarmHttp.GetByteArrayAsync(baseReq + "/" + path.Replace('\\', '/') + q);
+                    // 各路径段单独编码（保留 '/' 作分隔）：seed 设置目录名含空格/中文，
+                    // 与 Propel 端 Uri.UnescapeDataString 形成闭环，避免预热这类文件时 404。
+                    var relEnc = string.Join("/", path.Replace('\\', '/').Split('/')
+                                             .Select(s => Uri.EscapeDataString(s)).ToArray());
+                    var data = await WarmHttp.GetByteArrayAsync(baseReq + "/" + relEnc + q);
                     Directory.CreateDirectory(Path.GetDirectoryName(cacheFile));
                     File.WriteAllBytes(cacheFile, data);
                 }

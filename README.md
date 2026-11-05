@@ -29,7 +29,7 @@ Propel（中心源 / 发布源）  ──►  Repel（分支 / 缓存 / P2P 注�
 
 - **第 1 层 · 源（Propel）**：`PropelService` 部署在自己公司，并对外映射端口，提供发布源 HTTP 服务，对外暴露 `all.lst`
   应用清单与文件下载（支持分片续传），并以 token 做租户鉴权。配套 `PropelControl`（发布工具，
-  已集成清单 / 启动信息生成器，原为独立的 `MakeManifest.exe`）。
+  已集成清单 / 索引生成器，原为独立的 `MakeManifest.exe`）。
 - **第 2 层 · 分支 / 缓存（Repel）**：`RepelService` 部署在客户那边的一台电脑上，回源 Propel 并做磁盘缓存，
   同时提供 peer 注册与查询，让客户端之间走 P2P 就近分发；`RepelControl` 用于维护
   注册表（`repel.lst`）。对应原架构中「分支缓存」一层。
@@ -46,7 +46,7 @@ Propel（中心源 / 发布源）  ──►  Repel（分支 / 缓存 / P2P 注�
   RepelControl/    管控台（维护 repel.lst 注册表）
   repelView/       查看器（查看分发清单 / 缓存状态）
   PropelService/   发布源 HTTP 服务（中心源：all.lst + 文件下载 + 令牌鉴权）
-  PropelControl/   发布工具（已集成清单 / 启动信息生成器，原 ManifestGen）
+  PropelControl/   发布工具（已集成清单 / 索引生成器）
   README.md
   .gitignore
 ```

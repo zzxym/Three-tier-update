@@ -32,7 +32,7 @@ Name: "chs"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [Files]
 ; —— 客户端（Impel 端）——
-Source: "..\stage\impel\*"; DestDir: "{localappdata}\Impel"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\stage\impel\*"; DestDir: "{localappdata}\Impel"; Excludes: "*.pdb;*.config;*.ico"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 ; 开始菜单（当前用户）

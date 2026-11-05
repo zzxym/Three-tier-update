@@ -333,15 +333,17 @@ namespace Impel
                     // 极小竞态窗口下（双击）重复触发被引擎忽略时返回 state="更新中"：等真实任务完成
                     if (res != null && res.state == "更新中")
                         while (UpdateEngine.IsUpdating(app.id)) await System.Threading.Tasks.Task.Delay(500);
-                    // 更新失败（异常）或判定“需修复”时不启动，避免运行不完整/错误版本（如 CefSharp 断点异常弹窗）
-                    if (res == null || res.state == "需修复")
+                    // 更新失败（异常）、判定“需修复”、或“未安装”（清单拉取失败/服务器无此应用）时不启动：
+                    // “未安装”意味着连应用文件都没有，直接启动必然报“未找到主程序”
+                    if (res == null || res.state == "需修复" || res.state.StartsWith("未安装"))
                     {
                         okToLaunch = false;
                         var nm = app.name ?? app.id ?? "?";
-                        App.Log("跳过启动（更新未完成）：" + nm);
+                        var reason = res == null ? "更新异常" : res.state;
+                        App.Log("跳过启动（" + reason + "）：" + nm);
                         Dispatcher.Invoke(() => System.Windows.MessageBox.Show(
-                            "“" + nm + "”更新未完成（需修复），本次不启动。请检查网络或源后重试。",
-                            "更新未完成", MessageBoxButton.OK, MessageBoxImage.Warning));
+                            "“" + nm + "”未能就绪（" + reason + "），本次不启动。请检查网络或源后重试。",
+                            "无法启动", MessageBoxButton.OK, MessageBoxImage.Warning));
                     }
                 }
                 if (okToLaunch) Launcher.Launch(_cfg, app);

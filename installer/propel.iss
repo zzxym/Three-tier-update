@@ -27,7 +27,7 @@ Name: "chs"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [Files]
 ; —— Propel 发布源：PropelService + PropelControl ——
-Source: "..\stage\propel\*"; DestDir: "{app}\propel"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\stage\propel\*"; DestDir: "{app}\propel"; Excludes: "*.pdb;*.config;*.ico"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\天一源服务器"; Filename: "{app}\propel\PropelControl.exe"

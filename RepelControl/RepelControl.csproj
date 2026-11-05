@@ -15,14 +15,21 @@
     <FileVersion>4.1.0</FileVersion>
     <InformationalVersion>26.1.0</InformationalVersion>
     <Version>26.1.0</Version>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="System.ServiceProcess" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="app.ico" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
-  <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
+  <!-- 部署精简：不保留 pdb 与自动生成的 .exe.config（仅 supportedRuntime 声明，net48 非必需），构建后删除 -->
+  <Target Name="TrimOutput" AfterTargets="Build">
+    <ItemGroup>
+      <_PdbFiles Include="$(OutDir)*.pdb" />
+    </ItemGroup>
+    <Delete Files="@(_PdbFiles)" />
+    <Delete Files="$(OutDir)$(TargetFileName).config" Condition="Exists('$(OutDir)$(TargetFileName).config')" />
+  </Target>
 </Project>

@@ -100,7 +100,8 @@
                           BorderThickness="0" Background="Transparent" RowHeight="30"
                           HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
                     <DataGrid.Columns>
-                        <DataGridTextColumn Header="客户端" Binding="{Binding providerUrl}" Width="220"/>
+                        <DataGridTextColumn Header="客户端" Binding="{Binding HostText}" Width="130"/>
+                        <DataGridTextColumn Header="地址" Binding="{Binding providerUrl}" Width="220"/>
                         <DataGridTextColumn Header="应用数" Binding="{Binding AppsText}" Width="70"/>
                         <DataGridTextColumn Header="哈希数" Binding="{Binding HashesText}" Width="70"/>
                         <!-- 正在下载占满剩余宽度：同时下载多个应用时名称较长 -->

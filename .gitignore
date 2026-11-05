@@ -2,6 +2,8 @@
 bin/
 obj/
 dist/
+installer-output/
+stage/
 *.user
 *.suo
 *.userprefs

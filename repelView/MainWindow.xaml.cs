@@ -16,10 +16,13 @@ namespace RepelView
     public class PeerRow : INotifyPropertyChanged
     {
         public string providerUrl { get; set; }
+        public string host;   // 客户端本地计算机名（Repel /diag 下发）
         public int apps { get; set; }
         public int hashes { get; set; }
         public bool online { get; set; }
         public string lastSeenUtc { get; set; }
+        private string _hostText = "-";
+        public string HostText { get { return _hostText; } set { _hostText = value; OnChanged("HostText"); } }
         private string _lastSeenDisplay = "-";
         public string LastSeenDisplay { get { return _lastSeenDisplay; } set { _lastSeenDisplay = value; OnChanged("LastSeenDisplay"); } }
         private string _appsText = "-";
@@ -52,7 +55,7 @@ namespace RepelView
     }
     public class DiagRoot
     {
-        public int port; public string source; public bool tokenRequired; public string cacheDir;
+        public int port; public string source; public bool tokenRequired; public string cacheDir; public string selfUrl;
         public long menuVersion; public long uptimeSec;
         public CacheInfo cache;
         public PropelInfo propel; public List<PeerRow> peers; public StatsInfo stats; public List<string> recent;
@@ -229,6 +232,7 @@ namespace RepelView
             {
                 foreach (var p in d.peers)
                 {
+                    p.HostText = string.IsNullOrEmpty(p.host) ? "-" : p.host;
                     p.LastSeenDisplay = ParseUtc(p.lastSeenUtc);
                     p.AppsText = p.apps.ToString();
                     p.HashesText = p.hashes.ToString();
@@ -246,7 +250,9 @@ namespace RepelView
             // 置顶一行：中心缓存（Repel）自身，应用数/哈希数取自服务端缓存统计，最新上报以 "-" 表示
             _peers.Insert(0, new PeerRow
             {
-                providerUrl = "repel 缓存",
+                providerUrl = d.selfUrl,
+                host = "本机",
+                HostText = "本机",
                 apps = d.cache?.apps ?? 0,
                 hashes = d.cache?.hashes ?? 0,
                 online = true,
