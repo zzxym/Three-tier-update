@@ -32,7 +32,6 @@ jobs:
           dotnet build -c Release RepelControl/RepelControl.csproj
           dotnet build -c Release PropelControl/PropelControl.csproj
           dotnet build -c Release repelView/repelView.csproj
-          dotnet build -c Release ManifestGen/ManifestGen.csproj
 
       - name: Stage binaries for installers
         run: |

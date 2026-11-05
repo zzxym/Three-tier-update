@@ -28,8 +28,8 @@ Propel（中心源 / 发布源）  ──►  Repel（分支 / 缓存 / P2P 注�
 ```
 
 - **第 1 层 · 源（Propel）**：`PropelService` 部署在自己公司，并对外映射端口，提供发布源 HTTP 服务，对外暴露 `all.lst`
-  应用清单与文件下载（支持分片续传），并以 token 做租户鉴权。配套 `PropelControl`（发布工具）
-  与 `ManifestGen`（清单 / 启动信息生成器 `MakeManifest.exe`）。
+  应用清单与文件下载（支持分片续传），并以 token 做租户鉴权。配套 `PropelControl`（发布工具，
+  已集成清单 / 启动信息生成器，原为独立的 `MakeManifest.exe`）。
 - **第 2 层 · 分支 / 缓存（Repel）**：`RepelService` 部署在客户那边的一台电脑上，回源 Propel 并做磁盘缓存，
   同时提供 peer 注册与查询，让客户端之间走 P2P 就近分发；`RepelControl` 用于维护
   注册表（`repel.lst`）。对应原架构中「分支缓存」一层。
@@ -40,14 +40,13 @@ Propel（中心源 / 发布源）  ──►  Repel（分支 / 缓存 / P2P 注�
 ## 目录结构（仓库源码）
 
 ```
-MenuClient/
+/
   Impel/           客户端：悬浮坞、更新引擎、P2P 提供端、配置、图标、启动器、设置
   RepelService/    HTTP P2P 注册 / 缓存服务（回源 Propel 并磁盘缓存，提供 peer 查询）
   RepelControl/    管控台（维护 repel.lst 注册表）
   repelView/       查看器（查看分发清单 / 缓存状态）
   PropelService/   发布源 HTTP 服务（中心源：all.lst + 文件下载 + 令牌鉴权）
-  PropelControl/   发布工具（生成 / 维护发布清单）
-  ManifestGen/     清单与启动信息生成器（MakeManifest.exe）
+  PropelControl/   发布工具（已集成清单 / 启动信息生成器，原 ManifestGen）
   README.md
   .gitignore
 ```
@@ -66,7 +65,6 @@ dotnet build -c Release PropelService/PropelService.csproj
 dotnet build -c Release RepelControl/RepelControl.csproj
 dotnet build -c Release PropelControl/PropelControl.csproj
 dotnet build -c Release repelView/repelView.csproj
-dotnet build -c Release ManifestGen/ManifestGen.csproj
 ```
 
 `dist/` 是最终部署布局（含 `impel/`、`repel/`、`propel/` 等可执行目录），由各工程

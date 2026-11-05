@@ -374,7 +374,7 @@ namespace Impel
 
         /// <summary>更新/校验时跳过的运行时文件：应用运行会改写这些文件（如日志、临时、缓存），
         /// 若纳入哈希比对会误判“需更新/损坏”，导致每次打开应用都重新下载。
-        /// 规则与清单生成器（ManifestGen / PropelControl）的 IsIgnoredForManifest 保持一致。</summary>
+        /// 规则需与 PropelControl 中清单生成器（ManifestForm）的 IsIgnoredForManifest 保持一致。</summary>
         internal static bool IsRuntimeIgnored(string rel)
         {
             if (string.IsNullOrEmpty(rel)) return false;
