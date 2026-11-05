@@ -68,12 +68,14 @@ jobs:
           $isl = "C:\Program Files (x86)\Inno Setup 6\Languages\ChineseSimplified.isl"
           $lang = if (Test-Path $isl) { "compiler:Languages\ChineseSimplified.isl" } else { "compiler:Default.isl" }
           Write-Host "Using MessagesFile: $lang"
-          foreach ($f in @("installer/client-server.iss","installer/propel.iss")) {
+          foreach ($f in @("installer/client.iss","installer/server.iss","installer/propel.iss")) {
             (Get-Content $f) -replace 'MessagesFile: "compiler:Languages\\ChineseSimplified.isl"', "MessagesFile: `"$lang`"" | Set-Content $f
           }
-          & $iscc "installer/client-server.iss"; if ($LASTEXITCODE -ne 0) { throw "ISCC failed for client-server" }
+          & $iscc "installer/client.iss"; if ($LASTEXITCODE -ne 0) { throw "ISCC failed for client" }
+          & $iscc "installer/server.iss"; if ($LASTEXITCODE -ne 0) { throw "ISCC failed for server" }
           & $iscc "installer/propel.iss"; if ($LASTEXITCODE -ne 0) { throw "ISCC failed for propel" }
-          if (-not (Test-Path "installer-output/ThreeTier-ClientServer-setup.exe")) { throw "missing client-server exe" }
+          if (-not (Test-Path "installer-output/ThreeTier-Client-setup.exe")) { throw "missing client exe" }
+          if (-not (Test-Path "installer-output/ThreeTier-RepelServer-setup.exe")) { throw "missing server exe" }
           if (-not (Test-Path "installer-output/ThreeTier-Propel-setup.exe")) { throw "missing propel exe" }
           Write-Host "Installers built successfully"
 
@@ -94,9 +96,8 @@ jobs:
 
             自动构建安装包（CC BY-NC-SA 4.0 授权，禁止商用；任何公司/组织将其部署以提供对第三方客户的服务均视为商业使用，不在授权范围内）。
 
-            - **ThreeTier-ClientServer-setup.exe**：客户端（Impel）与局域网服务端（Repel）二选一安装
-              - 客户端：Impel
-              - 服务端：RepelService + RepelControl + repelView
-            - **ThreeTier-Propel-setup.exe**：Propel 发布源（PropelControl + PropelService）
+            - **ThreeTier-Client-setup.exe**：客户端（Impel，按当前用户安装到 %LOCALAPPDATA%\Impel，无需管理员/UAC）
+            - **ThreeTier-RepelServer-setup.exe**：局域网服务端（Repel，需管理员权限，安装到 Program Files）—— RepelService + RepelControl + repelView
+            - **ThreeTier-Propel-setup.exe**：Propel 发布源（PropelControl + PropelService，需管理员权限）
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
