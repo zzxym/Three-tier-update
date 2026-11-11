@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <!-- 无控制台窗口：自更新过程只写 repelupdate.log，避免黑框闪现 -->

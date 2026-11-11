@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <!-- 无控制台窗口：升级过程只写 selfupdate.log，避免用户看到黑框闪现 -->
