@@ -37,7 +37,6 @@ namespace ImpelUpdater
                 Log("=== ImpelUpdater 启动 dir=" + _dir + " stage=" + _stage + " pid=" + pid + " ===");
 
                 WaitOldProcessExit(pid);
-                MigrateIfNeeded();
                 var entries = ReadManifest();
                 VerifyStage(entries);
                 Replace(entries);
@@ -210,87 +209,6 @@ namespace ImpelUpdater
         {
             // 回滚后旧版必须还能起来，否则用户会失去菜单且无法自助恢复
             try { LaunchImpel(); } catch { }
-        }
-
-        /// <summary>升级时若 impel 仍在软件根目录（非 impel\ 子目录），则整体迁入 impel\ 子目录（含配置文件与依赖），
-        /// 并把更新器自身复制过去；同时把已知快捷方式的 Target 改成新的 impel.exe。仅迁移一次。</summary>
-        private static void MigrateIfNeeded()
-        {
-            var exeAtRoot = Path.Combine(_dir, "impel.exe");
-            if (!File.Exists(exeAtRoot)) return; // 已在 impel\ 子目录（已迁移）
-            var sub = Path.Combine(_dir, "impel");
-            if (Directory.Exists(sub) && File.Exists(Path.Combine(sub, "impel.exe"))) return;
-            try
-            {
-                Directory.CreateDirectory(sub);
-                // 更新器自身正在根目录运行，不可移动：复制到子目录以保证下次自更新可拉起
-                var self = Path.Combine(_dir, "ImpelUpdater.exe");
-                if (File.Exists(self)) { try { File.Copy(self, Path.Combine(sub, "ImpelUpdater.exe"), true); } catch { } }
-                // 移动其余所有条目到子目录（排除 staging 临时目录、更新器自身、目标子目录本身）
-                foreach (var entry in Directory.GetFileSystemEntries(_dir))
-                {
-                    var name = Path.GetFileName(entry);
-                    if (name.Equals("SelfUpdate.staging", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (name.Equals("ImpelUpdater.exe", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (name.Equals("impel", StringComparison.OrdinalIgnoreCase)) continue;
-                    var dest = Path.Combine(sub, name);
-                    try
-                    {
-                        if (File.Exists(entry) && !Directory.Exists(entry))
-                        {
-                            if (File.Exists(dest)) File.Delete(dest);
-                            File.Move(entry, dest);
-                        }
-                        else if (Directory.Exists(entry))
-                        {
-                            if (Directory.Exists(dest)) Directory.Delete(dest, true);
-                            Directory.Move(entry, dest);
-                        }
-                    }
-                    catch (Exception ex) { Log("迁移条目失败 " + name + "：" + ex.Message); }
-                }
-                _dir = sub;
-                UpdateShortcuts(Path.Combine(sub, "impel.exe"), sub);
-                Log("impel 已迁移至 " + sub);
-            }
-            catch (Exception ex) { Log("迁移 impel 至子目录失败：" + ex.Message); }
-        }
-
-        /// <summary>把已知快捷方式（桌面 / 开始菜单 / 开机自启）的 Target 指向新的 impel.exe，避免迁移后失效。</summary>
-        private static void UpdateShortcuts(string newExe, string newWorkdir)
-        {
-            try
-            {
-                var shellType = Type.GetTypeFromProgID("WScript.Shell");
-                if (shellType == null) return;
-                var shell = Activator.CreateInstance(shellType);
-                var create = shellType.GetMethod("CreateShortcut", new[] { typeof(string) });
-                string[] links = new[]
-                {
-                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "天一软件菜单.lnk"),
-                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs", "天一软件菜单.lnk"),
-                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "impel.lnk"),
-                };
-                foreach (var link in links)
-                {
-                    if (!File.Exists(link)) continue;
-                    try
-                    {
-                        var sc = create.Invoke(shell, new object[] { link });
-                        var scType = sc.GetType();
-                        var targetProp = scType.GetProperty("TargetPath");
-                        var t = (string)targetProp.GetValue(sc, null);
-                        if (string.IsNullOrEmpty(t) || !t.Equals(newExe, StringComparison.OrdinalIgnoreCase))
-                        {
-                            targetProp.SetValue(sc, newExe, null);
-                            scType.GetProperty("WorkingDirectory").SetValue(sc, newWorkdir, null);
-                            scType.GetMethod("Save").Invoke(sc, null);
-                        }
-                    }
-                    catch { }
-                }
-            }
-            catch { }
         }
 
         private static void Commit()

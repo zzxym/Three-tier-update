@@ -65,13 +65,15 @@ namespace Impel
 
             // 一次性迁移：把位于软件根目录的本体迁入 impel\ 子目录（含配置与依赖）。
             // 放在 impel.exe 自身启动期，故即使 ImpelUpdater 尚未更新，升级后首次启动即可完成迁移。
-            string migrateRoot = null;
+            string migrateRoot = null, migrateTo = null;
             foreach (var a in e.Args)
                 if (a.StartsWith("--migrate", StringComparison.OrdinalIgnoreCase))
                     migrateRoot = a.Length > 9 ? a.Substring(10).Trim('"') : null;
+                else if (a.StartsWith("--to", StringComparison.OrdinalIgnoreCase))
+                    migrateTo = a.Length > 5 ? a.Substring(6).Trim('"') : null;
             if (migrateRoot != null)
             {
-                try { FinishMigration(migrateRoot); } catch (Exception ex) { Log("迁移收尾失败：" + ex.Message); }
+                try { FinishMigration(migrateRoot, migrateTo); } catch (Exception ex) { Log("迁移收尾失败：" + ex.Message); }
             }
             else if (NeedsMigration())
             {
@@ -97,29 +99,38 @@ namespace Impel
             base.OnStartup(e);
         }
 
-        /// <summary>当前 exe 是否已位于期望布局：&lt;软件根&gt;\impel\impel.exe（软件根下的 impel 子目录中）。
-        /// 不依赖目录名（软件根目录本身也可能叫 impel，例如 d:\impel），只比对实际期望路径。</summary>
+        /// <summary>impel 的期望安装目录：&lt;softwareRoot&gt;\impel。softwareRoot 来自 Impel.json（用户可配置，缺省 d:\soft）；
+        /// 读不到配置时回退为当前目录下的 impel 子目录。</summary>
+        private static string TargetImpelDir()
+        {
+            try
+            {
+                var cfg = ConfigService.Load();
+                return Path.Combine(ConfigService.SoftwareRoot(cfg), "impel");
+            }
+            catch { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\'), "impel"); }
+        }
+
+        /// <summary>当前 exe 是否已位于期望布局：&lt;softwareRoot&gt;\impel\impel.exe。</summary>
         private static bool IsInTargetLayout()
         {
-            var root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
             var self = System.Reflection.Assembly.GetExecutingAssembly().Location;
-            var targetExe = Path.Combine(root, "impel", "impel.exe");
+            var targetExe = Path.Combine(TargetImpelDir(), "impel.exe");
             return string.Equals(Path.GetFullPath(self), Path.GetFullPath(targetExe), StringComparison.OrdinalIgnoreCase);
         }
 
-        /// <summary>是否需要迁移：本体当前不在“软件根\impel\impel.exe”布局，且软件根目录下直接存在 impel.exe（旧布局）。</summary>
+        /// <summary>是否需要迁移：本体不在期望布局，且目标位置尚无其它 impel 实例（避免覆盖另一份安装）。</summary>
         private static bool NeedsMigration()
         {
             if (IsInTargetLayout()) return false;
-            var root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
-            return File.Exists(Path.Combine(root, "impel.exe"));
+            return !File.Exists(Path.Combine(TargetImpelDir(), "impel.exe"));
         }
 
-        /// <summary>第一阶段：复制本体与依赖到 impel\ 子目录，释放互斥体后拉起子目录实例完成收尾，并退出本进程。</summary>
+        /// <summary>第一阶段：复制本体与依赖到 &lt;softwareRoot&gt;\impel，释放互斥体后拉起目标实例完成收尾，并退出本进程。</summary>
         private static void BootstrapMigration()
         {
             var root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
-            var sub = Path.Combine(root, "impel");
+            var sub = TargetImpelDir();
             try { Directory.CreateDirectory(sub); } catch { }
             try { File.Copy(Path.Combine(root, "impel.exe"), Path.Combine(sub, "impel.exe"), true); } catch { }
             var dll = Path.Combine(root, "Newtonsoft.Json.dll");
@@ -130,7 +141,7 @@ namespace Impel
             {
                 Process.Start(new ProcessStartInfo(Path.Combine(sub, "impel.exe"))
                 {
-                    Arguments = "--migrate \"" + root + "\"",
+                    Arguments = "--migrate \"" + root + "\" --to \"" + sub + "\"",
                     WorkingDirectory = sub,
                     UseShellExecute = false,
                     CreateNoWindow = true
@@ -140,36 +151,61 @@ namespace Impel
             Application.Current?.Shutdown();
         }
 
-        /// <summary>第二阶段（子目录实例）：把根目录剩余的配置/缓存/依赖整体移入 impel\，并修正快捷方式指向。</summary>
-        private static void FinishMigration(string root)
+        /// <summary>第二阶段（目标目录实例）：把旧目录剩余的配置/缓存/依赖整体移入 &lt;softwareRoot&gt;\impel\，并修正快捷方式指向。</summary>
+        private static void FinishMigration(string root, string to)
         {
-            var sub = Path.Combine(root, "impel");
+            var sub = string.IsNullOrEmpty(to) ? Path.Combine(root, "impel") : Path.GetFullPath(to);
+            Directory.CreateDirectory(sub);
             foreach (var entry in Directory.GetFileSystemEntries(root))
             {
                 var name = Path.GetFileName(entry);
-                if (name.Equals("impel", StringComparison.OrdinalIgnoreCase)) continue;       // 目标子目录本身
-                if (name.Equals("impel.exe", StringComparison.OrdinalIgnoreCase)) continue;    // 本体已复制
-                if (name.Equals("Newtonsoft.Json.dll", StringComparison.OrdinalIgnoreCase)) continue; // 依赖已复制
                 if (name.Equals("SelfUpdate.staging", StringComparison.OrdinalIgnoreCase)) continue;   // 升级临时目录
-                var dest = Path.Combine(sub, name);
-                try
+                if (Directory.Exists(entry) && string.Equals(Path.GetFullPath(entry), sub, StringComparison.OrdinalIgnoreCase))
+                    continue; // 目标目录本身
+                if (Directory.Exists(entry) && name.Equals("impel", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(Path.GetFullPath(entry), sub, StringComparison.OrdinalIgnoreCase))
                 {
-                    if (File.Exists(entry) && !Directory.Exists(entry))
-                    {
-                        if (File.Exists(dest)) File.Delete(dest);
-                        File.Move(entry, dest);
-                    }
-                    else if (Directory.Exists(entry))
-                    {
-                        if (Directory.Exists(dest)) Directory.Delete(dest, true);
-                        Directory.Move(entry, dest);
-                    }
+                    // 旧版迁移在旧目录内留下的 impel\ 残留：内容并入目标后删除
+                    MoveInto(entry, sub);
+                    try { Directory.Delete(entry, true); } catch (Exception ex) { Log("清理旧 impel 残留失败：" + ex.Message); }
+                    continue;
                 }
-                catch (Exception ex) { Log("迁移条目失败 " + name + "：" + ex.Message); }
+                if (name.Equals("impel.exe", StringComparison.OrdinalIgnoreCase))
+                { try { File.Delete(entry); } catch { } continue; }   // 本体已复制到目标，删除旧文件
+                if (name.Equals("Newtonsoft.Json.dll", StringComparison.OrdinalIgnoreCase) && File.Exists(Path.Combine(sub, name)))
+                { try { File.Delete(entry); } catch { } continue; }   // 依赖已复制到目标
+                MoveEntryTo(entry, sub);
             }
             UpdateShortcuts(Path.Combine(sub, "impel.exe"), sub);
-            try { var old = Path.Combine(root, "impel.exe"); if (File.Exists(old)) File.Delete(old); } catch { }
-            try { var old = Path.Combine(root, "Newtonsoft.Json.dll"); if (File.Exists(old)) File.Delete(old); } catch { }
+        }
+
+        /// <summary>把单个文件/目录移动到目标目录；.NET Framework 的 Move 不支持跨卷，失败时降级为复制+删除。</summary>
+        private static void MoveEntryTo(string entry, string destDir)
+        {
+            var name = Path.GetFileName(entry);
+            var dest = Path.Combine(destDir, name);
+            try
+            {
+                if (Directory.Exists(entry))
+                {
+                    if (Directory.Exists(dest)) Directory.Delete(dest, true);
+                    try { Directory.Move(entry, dest); }
+                    catch { Directory.CreateDirectory(dest); MoveInto(entry, dest); Directory.Delete(entry, true); }
+                }
+                else
+                {
+                    if (File.Exists(dest)) File.Delete(dest);
+                    try { File.Move(entry, dest); } catch { File.Copy(entry, dest, true); File.Delete(entry); }
+                }
+            }
+            catch (Exception ex) { Log("迁移条目失败 " + name + "：" + ex.Message); }
+        }
+
+        /// <summary>把目录内全部条目移入目标目录。</summary>
+        private static void MoveInto(string srcDir, string destDir)
+        {
+            foreach (var entry in Directory.GetFileSystemEntries(srcDir))
+                MoveEntryTo(entry, destDir);
         }
 
         /// <summary>把已知快捷方式（桌面 / 开始菜单 / 开机自启）的 Target 指向新的 impel.exe；不存在的 .lnk 不创建不修改。</summary>
