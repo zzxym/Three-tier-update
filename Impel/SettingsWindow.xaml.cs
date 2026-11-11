@@ -12,6 +12,8 @@ namespace Impel
         public SettingsWindow(ImpelConfig cfg)
         {
             InitializeComponent();
+            // 标题显示当前版本号（与自更新比对同源，ProductVersion 剥掉构建元数据）
+            Title = Title + "  v" + ClientInfo.Version;
             // 高分屏下可用高度不足时钳制窗口高度，避免被任务栏截断
             Loaded += (s, e) =>
             {
