@@ -7,8 +7,8 @@
     <AssemblyName>ImpelUpdater</AssemblyName>
     <RootNamespace>ImpelUpdater</RootNamespace>
     <LangVersion>latest</LangVersion>
-    <Version>26.1.2</Version>
-    <InformationalVersion>26.1.2</InformationalVersion>
+    <Version>26.1.3</Version>
+    <InformationalVersion>26.1.3</InformationalVersion>
     <OutputPath>..\dist\impel\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <DebugType>none</DebugType>

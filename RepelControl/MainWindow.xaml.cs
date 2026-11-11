@@ -31,7 +31,14 @@ namespace RepelControl
                 var asm = System.Reflection.Assembly.GetExecutingAssembly();
                 var a = (System.Reflection.AssemblyInformationalVersionAttribute)
                     Attribute.GetCustomAttribute(asm, typeof(System.Reflection.AssemblyInformationalVersionAttribute));
-                if (a != null && !string.IsNullOrEmpty(a.InformationalVersion)) Title = Title + " v" + a.InformationalVersion;
+                if (a != null && !string.IsNullOrEmpty(a.InformationalVersion))
+                {
+                    // InformationalVersion 在 CI 构建时会带 "+<commit>" 后缀（SourceRevisionId），截去只留版本号
+                    var v = a.InformationalVersion;
+                    var plus = v.IndexOf('+');
+                    if (plus >= 0) v = v.Substring(0, plus);
+                    Title = Title + " v" + v;
+                }
             }
             catch { }
             // 高分屏（150% 缩放）下可用高度不足时，将窗口高度钳制到工作区内，避免底部被任务栏截断

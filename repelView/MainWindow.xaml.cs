@@ -80,7 +80,14 @@ namespace RepelView
                 var asm = System.Reflection.Assembly.GetExecutingAssembly();
                 var a = (System.Reflection.AssemblyInformationalVersionAttribute)
                     Attribute.GetCustomAttribute(asm, typeof(System.Reflection.AssemblyInformationalVersionAttribute));
-                if (a != null && !string.IsNullOrEmpty(a.InformationalVersion)) Title = Title + " v" + a.InformationalVersion;
+                if (a != null && !string.IsNullOrEmpty(a.InformationalVersion))
+                {
+                    // InformationalVersion 在 CI 构建时会带 "+<commit>" 后缀（SourceRevisionId），截去只留版本号
+                    var v = a.InformationalVersion;
+                    var plus = v.IndexOf('+');
+                    if (plus >= 0) v = v.Substring(0, plus);
+                    Title = Title + " v" + v;
+                }
             }
             catch { }
             dgPeers.ItemsSource = _peers;
