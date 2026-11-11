@@ -96,7 +96,6 @@ jobs:
           Copy-Item -Recurse -Force "RepelService/bin/Release/net48/*" "$repel/"
           Copy-Item -Recurse -Force "RepelControl/bin/Release/net48/*" "$repel/"
           Copy-Item -Recurse -Force "repelView/bin/Release/net48/*" "$repel/"
-          Set-Content -Path "$repel/repel.json" -Value '{"port":80,"source":"","tokens":"","cache":"cache","selfUrl":"","adminToken":""}' -Encoding UTF8
 
           # Propel 端：PropelService + PropelControl（共用 propel.json，字段两端兼容）
           $propel = "portable/propel"

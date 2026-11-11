@@ -74,6 +74,15 @@ namespace RepelView
         public MainWindow()
         {
             InitializeComponent();
+            // 标题追加程序集版本号
+            try
+            {
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                var a = (System.Reflection.AssemblyInformationalVersionAttribute)
+                    Attribute.GetCustomAttribute(asm, typeof(System.Reflection.AssemblyInformationalVersionAttribute));
+                if (a != null && !string.IsNullOrEmpty(a.InformationalVersion)) Title = Title + " v" + a.InformationalVersion;
+            }
+            catch { }
             dgPeers.ItemsSource = _peers;
             Loaded += (s, e) =>
             {

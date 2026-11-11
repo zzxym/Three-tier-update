@@ -33,6 +33,15 @@ namespace PropelControl
         public MainWindow()
         {
             InitializeComponent();
+            // 标题追加程序集版本号
+            try
+            {
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                var a = (System.Reflection.AssemblyInformationalVersionAttribute)
+                    Attribute.GetCustomAttribute(asm, typeof(System.Reflection.AssemblyInformationalVersionAttribute));
+                if (a != null && !string.IsNullOrEmpty(a.InformationalVersion)) Title = Title + " v" + a.InformationalVersion;
+            }
+            catch { }
             // 高分屏（150% 缩放）下可用高度不足：将窗口高度钳制到工作区内，避免底部被任务栏截断
             Loaded += (s, e) =>
             {
