@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Windows;
@@ -12,8 +13,8 @@ namespace Impel
 
         public static bool EnableLogging { get; private set; } = false; // 默认关，不产生日志
 
-        private Mutex _single;          // 单实例互斥体
-        private EventWaitHandle _showEvt; // 跨进程“呼出”信号
+        private static Mutex _single;          // 单实例互斥体
+        private static EventWaitHandle _showEvt; // 跨进程“呼出”信号
 
         public App()
         {
@@ -61,6 +62,23 @@ namespace Impel
                 Shutdown();
                 return;
             }
+
+            // 一次性迁移：把位于软件根目录的本体迁入 impel\ 子目录（含配置与依赖）。
+            // 放在 impel.exe 自身启动期，故即使 ImpelUpdater 尚未更新，升级后首次启动即可完成迁移。
+            string migrateRoot = null;
+            foreach (var a in e.Args)
+                if (a.StartsWith("--migrate", StringComparison.OrdinalIgnoreCase))
+                    migrateRoot = a.Length > 9 ? a.Substring(10).Trim('"') : null;
+            if (migrateRoot != null)
+            {
+                try { FinishMigration(migrateRoot); } catch (Exception ex) { Log("迁移收尾失败：" + ex.Message); }
+            }
+            else if (NeedsMigration())
+            {
+                BootstrapMigration();
+                return; // BootstrapMigration 内部已启动子目录实例并关闭本进程
+            }
+
             // 首实例监听呼出信号
             ThreadPool.RegisterWaitForSingleObject(_showEvt,
                 (s, t) => Dispatcher.Invoke(() => Impel.MainWindow.Current?.ShowDock()),
@@ -77,6 +95,113 @@ namespace Impel
                 MessageBox.Show("Impel 启动失败：\n" + ex.Message, "Impel", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             base.OnStartup(e);
+        }
+
+        private static bool IsInImpelSubdir()
+        {
+            var dir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
+            return string.Equals(Path.GetFileName(dir), "impel", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>是否需要迁移：本体仍在软件根目录（不在 impel\ 子目录）且根目录存在 impel.exe。</summary>
+        private static bool NeedsMigration()
+        {
+            if (IsInImpelSubdir()) return false;
+            return File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "impel.exe"));
+        }
+
+        /// <summary>第一阶段：复制本体与依赖到 impel\ 子目录，释放互斥体后拉起子目录实例完成收尾，并退出本进程。</summary>
+        private static void BootstrapMigration()
+        {
+            var root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
+            var sub = Path.Combine(root, "impel");
+            try { Directory.CreateDirectory(sub); } catch { }
+            try { File.Copy(Path.Combine(root, "impel.exe"), Path.Combine(sub, "impel.exe"), true); } catch { }
+            var dll = Path.Combine(root, "Newtonsoft.Json.dll");
+            if (File.Exists(dll)) { try { File.Copy(dll, Path.Combine(sub, "Newtonsoft.Json.dll"), true); } catch { } }
+            try { _single?.ReleaseMutex(); } catch { }
+            _single = null;
+            try
+            {
+                Process.Start(new ProcessStartInfo(Path.Combine(sub, "impel.exe"))
+                {
+                    Arguments = "--migrate \"" + root + "\"",
+                    WorkingDirectory = sub,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                });
+            }
+            catch (Exception ex) { Log("启动迁移实例失败：" + ex.Message); }
+            Application.Current?.Shutdown();
+        }
+
+        /// <summary>第二阶段（子目录实例）：把根目录剩余的配置/缓存/依赖整体移入 impel\，并修正快捷方式指向。</summary>
+        private static void FinishMigration(string root)
+        {
+            var sub = Path.Combine(root, "impel");
+            foreach (var entry in Directory.GetFileSystemEntries(root))
+            {
+                var name = Path.GetFileName(entry);
+                if (name.Equals("impel", StringComparison.OrdinalIgnoreCase)) continue;       // 目标子目录本身
+                if (name.Equals("impel.exe", StringComparison.OrdinalIgnoreCase)) continue;    // 本体已复制
+                if (name.Equals("Newtonsoft.Json.dll", StringComparison.OrdinalIgnoreCase)) continue; // 依赖已复制
+                if (name.Equals("SelfUpdate.staging", StringComparison.OrdinalIgnoreCase)) continue;   // 升级临时目录
+                var dest = Path.Combine(sub, name);
+                try
+                {
+                    if (File.Exists(entry) && !Directory.Exists(entry))
+                    {
+                        if (File.Exists(dest)) File.Delete(dest);
+                        File.Move(entry, dest);
+                    }
+                    else if (Directory.Exists(entry))
+                    {
+                        if (Directory.Exists(dest)) Directory.Delete(dest, true);
+                        Directory.Move(entry, dest);
+                    }
+                }
+                catch (Exception ex) { Log("迁移条目失败 " + name + "：" + ex.Message); }
+            }
+            UpdateShortcuts(Path.Combine(sub, "impel.exe"), sub);
+            try { var old = Path.Combine(root, "impel.exe"); if (File.Exists(old)) File.Delete(old); } catch { }
+            try { var old = Path.Combine(root, "Newtonsoft.Json.dll"); if (File.Exists(old)) File.Delete(old); } catch { }
+        }
+
+        /// <summary>把已知快捷方式（桌面 / 开始菜单 / 开机自启）的 Target 指向新的 impel.exe；不存在的 .lnk 不创建不修改。</summary>
+        private static void UpdateShortcuts(string newExe, string newWorkdir)
+        {
+            try
+            {
+                var shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType == null) return;
+                var shell = Activator.CreateInstance(shellType);
+                var create = shellType.GetMethod("CreateShortcut", new[] { typeof(string) });
+                string[] links = new[]
+                {
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "天一软件菜单.lnk"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs", "天一软件菜单.lnk"),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "impel.lnk"),
+                };
+                foreach (var link in links)
+                {
+                    if (!File.Exists(link)) continue;
+                    try
+                    {
+                        var sc = create.Invoke(shell, new object[] { link });
+                        var scType = sc.GetType();
+                        var targetProp = scType.GetProperty("TargetPath");
+                        var t = (string)targetProp.GetValue(sc, null);
+                        if (string.IsNullOrEmpty(t) || !t.Equals(newExe, StringComparison.OrdinalIgnoreCase))
+                        {
+                            targetProp.SetValue(sc, newExe, null);
+                            scType.GetProperty("WorkingDirectory").SetValue(sc, newWorkdir, null);
+                            scType.GetMethod("Save").Invoke(sc, null);
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
         }
     }
 }
