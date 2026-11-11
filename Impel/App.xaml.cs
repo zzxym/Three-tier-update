@@ -97,17 +97,22 @@ namespace Impel
             base.OnStartup(e);
         }
 
-        private static bool IsInImpelSubdir()
+        /// <summary>当前 exe 是否已位于期望布局：&lt;软件根&gt;\impel\impel.exe（软件根下的 impel 子目录中）。
+        /// 不依赖目录名（软件根目录本身也可能叫 impel，例如 d:\impel），只比对实际期望路径。</summary>
+        private static bool IsInTargetLayout()
         {
-            var dir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
-            return string.Equals(Path.GetFileName(dir), "impel", StringComparison.OrdinalIgnoreCase);
+            var root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
+            var self = System.Reflection.Assembly.GetExecutingAssembly().Location;
+            var targetExe = Path.Combine(root, "impel", "impel.exe");
+            return string.Equals(Path.GetFullPath(self), Path.GetFullPath(targetExe), StringComparison.OrdinalIgnoreCase);
         }
 
-        /// <summary>是否需要迁移：本体仍在软件根目录（不在 impel\ 子目录）且根目录存在 impel.exe。</summary>
+        /// <summary>是否需要迁移：本体当前不在“软件根\impel\impel.exe”布局，且软件根目录下直接存在 impel.exe（旧布局）。</summary>
         private static bool NeedsMigration()
         {
-            if (IsInImpelSubdir()) return false;
-            return File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "impel.exe"));
+            if (IsInTargetLayout()) return false;
+            var root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
+            return File.Exists(Path.Combine(root, "impel.exe"));
         }
 
         /// <summary>第一阶段：复制本体与依赖到 impel\ 子目录，释放互斥体后拉起子目录实例完成收尾，并退出本进程。</summary>
