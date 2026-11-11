@@ -105,6 +105,37 @@ namespace Impel
         /// 下载并校验整个客户端升级包，随后拉起独立 updater 并关闭自身。
         /// 由长轮询线程调用；失败只记日志，不影响菜单运行，管理员可用新 cmdId 重新下发。
         /// </summary>
+        /// <summary>
+        /// 从服务端拉取客户端发布包到指定目录（destDir），逐文件校验 sha256；成功返回 true。
+        /// 与 TryUpgrade 不同：不写 staging、不拉起 ImpelUpdater，而是直接落到 destDir（用于迁移到新位置时先拉取发布版）。
+        /// </summary>
+        public static bool TryFetchTo(ImpelConfig cfg, string destDir, Action<string> log)
+        {
+            try
+            {
+                var obj = JObject.Parse(GetText(Url(cfg, "/impel/version")));
+                var version = (string)obj["version"] ?? "";
+                var files = obj["files"] as JArray;
+                if (string.IsNullOrEmpty(version) || files == null || files.Count == 0)
+                { log("未找到客户端发布包（Repel 未导入 impel 升级包）"); return false; }
+                foreach (JToken f in files)
+                {
+                    var rel = (string)f["path"] ?? "";
+                    var hash = (string)f["sha256"] ?? "";
+                    if (rel.Length == 0 || hash.Length != 64) continue;
+                    if (rel.IndexOf("..", StringComparison.Ordinal) >= 0 || Path.IsPathRooted(rel)) continue;
+                    if (rel.Equals(UpdaterExe, StringComparison.OrdinalIgnoreCase)) continue; // 更新器随安装包升级，发布包不含
+                    var dest = Path.Combine(destDir, rel.Replace('/', '\\'));
+                    Directory.CreateDirectory(Path.GetDirectoryName(dest));
+                    var url = Url(cfg, "/impel/file?path=" + Uri.EscapeDataString(rel));
+                    if (!Download(url, dest, hash, log))
+                    { log("拉取发布版失败：下载或校验不通过 " + rel); return false; }
+                }
+                return true;
+            }
+            catch (Exception ex) { log("拉取发布版异常：" + ex.Message); return false; }
+        }
+
         public static void TryUpgrade(ImpelConfig cfg, string wantedVersion, Action<string> log)
         {
             var stage = Path.Combine(ConfigService.ExeDir, StagingDirName);
