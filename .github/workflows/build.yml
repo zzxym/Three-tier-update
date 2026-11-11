@@ -1,8 +1,8 @@
 name: Build and Release
 
 # 触发条件：
-#   1) 推送新的版本号标签（如 26.1.0）时自动编译并发布 GitHub Release（含安装包）
-#   2) 允许在 Actions 页面手动触发（workflow_dispatch），仅产出安装包产物，不发布 Release
+#   1) 推送新的版本号标签（如 26.1.0）时自动编译并发布 GitHub Release（含安装包 + 免安装绿色 zip）
+#   2) 允许在 Actions 页面手动触发（workflow_dispatch），仅产出安装包与绿色 zip 产物，不发布 Release
 on:
   push:
     tags:
@@ -27,9 +27,11 @@ jobs:
       - name: Build all projects (Release)
         run: |
           dotnet build -c Release Impel/Impel.csproj
-          # 独立 updater 直接产出到 dist/impel，随客户端安装包一起分发
+          # 独立 updater 直接产出到 dist/impel，随客户端一起分发
           dotnet build -c Release ImpelUpdater/ImpelUpdater.csproj
           dotnet build -c Release RepelService/RepelService.csproj
+          # RepelUpdater 输出到 RepelService/bin，置于其后以避免写同目录冲突
+          dotnet build -c Release RepelUpdater/RepelUpdater.csproj
           dotnet build -c Release PropelService/PropelService.csproj
           dotnet build -c Release RepelControl/RepelControl.csproj
           dotnet build -c Release PropelControl/PropelControl.csproj
@@ -38,9 +40,9 @@ jobs:
       - name: Stage binaries for installers
         run: |
           New-Item -ItemType Directory -Force -Path stage/impel, stage/repel, stage/propel | Out-Null
-          # 客户端（Impel 端）：Impel 直接产出到 dist/impel
+          # 客户端（Impel 端）：构建已直接产出到 dist/impel
           Copy-Item -Recurse -Force "dist/impel/*" "stage/impel/"
-          # 局域网服务端（Repel 端）：RepelService + RepelControl + repelView
+          # 局域网服务端（Repel 端）：RepelService(+RepelUpdater) + RepelControl + repelView
           Copy-Item -Recurse -Force "RepelService/bin/Release/net48/*" "stage/repel/"
           Copy-Item -Recurse -Force "RepelControl/bin/Release/net48/*" "stage/repel/"
           Copy-Item -Recurse -Force "repelView/bin/Release/net48/*" "stage/repel/"
@@ -80,25 +82,68 @@ jobs:
           if (-not (Test-Path "installer-output/ThreeTier-Propel-setup.exe")) { throw "missing propel exe" }
           Write-Host "Installers built successfully"
 
+      - name: Package portable ZIPs (免安装绿色包)
+        run: |
+          $ver = "${{ github.ref_name }}"
+          # Impel 端（客户端）：构建已直接输出到 dist/impel（含 impel.exe + ImpelUpdater.exe + Newtonsoft.Json.dll）
+          $impel = "portable/impel"
+          New-Item -ItemType Directory -Force -Path $impel | Out-Null
+          Copy-Item -Recurse -Force "dist/impel/*" "$impel/"
+
+          # Repel 端：RepelService(+RepelUpdater) + RepelControl + repelView + repel.json 模板
+          $repel = "portable/repel"
+          New-Item -ItemType Directory -Force -Path $repel | Out-Null
+          Copy-Item -Recurse -Force "RepelService/bin/Release/net48/*" "$repel/"
+          Copy-Item -Recurse -Force "RepelControl/bin/Release/net48/*" "$repel/"
+          Copy-Item -Recurse -Force "repelView/bin/Release/net48/*" "$repel/"
+          Set-Content -Path "$repel/repel.json" -Value '{"port":80,"source":"","tokens":"","cache":"cache","selfUrl":"","adminToken":""}' -Encoding UTF8
+
+          # Propel 端：PropelService + PropelControl（共用 propel.json，字段两端兼容）
+          $propel = "portable/propel"
+          New-Item -ItemType Directory -Force -Path $propel | Out-Null
+          Copy-Item -Recurse -Force "PropelService/bin/Release/net48/*" "$propel/"
+          Copy-Item -Recurse -Force "PropelControl/bin/Release/net48/*" "$propel/"
+          Set-Content -Path "$propel/propel.json" -Value '{"root":"d:\\soft","addr":"8080","tokens":""}' -Encoding UTF8
+
+          # 压缩为带版本号的绿色包（解压即用）
+          Compress-Archive -Path "$impel/*" -DestinationPath "portable/impel-$ver.zip" -Force
+          Compress-Archive -Path "$repel/*" -DestinationPath "portable/repel-$ver.zip" -Force
+          Compress-Archive -Path "$propel/*" -DestinationPath "portable/propel-$ver.zip" -Force
+          Get-ChildItem portable/*.zip | ForEach-Object { Write-Host $_.Name }
+
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
         with:
           name: installers-${{ github.ref_name }}
           path: installer-output/*.exe
 
+      - name: Upload portable artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-${{ github.ref_name }}
+          path: portable/*.zip
+
       - name: Publish GitHub Release (仅标签触发)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
-          files: installer-output/*.exe
+          files: |
+            installer-output/*.exe
+            portable/*.zip
           body: |
             ## 天一网络三层更新 ${{ github.ref_name }}
 
-            自动构建安装包（CC BY-NC-SA 4.0 授权，禁止商用；任何公司/组织将其部署以提供对第三方客户的服务均视为商业使用，不在授权范围内）。
+            自动构建产物（CC BY-NC-SA 4.0 授权，禁止商用；任何公司/组织将其部署以提供对第三方客户的服务均视为商业使用，不在授权范围内）。
 
+            ### 安装包（推荐）
             - **ThreeTier-Client-setup.exe**：客户端（Impel，按当前用户安装到 %LOCALAPPDATA%\Impel，无需管理员/UAC）
             - **ThreeTier-RepelServer-setup.exe**：局域网服务端（Repel，需管理员权限，安装到 Program Files）—— RepelService + RepelControl + repelView
             - **ThreeTier-Propel-setup.exe**：Propel 发布源（PropelControl + PropelService，需管理员权限）
+
+            ### 免安装绿色包（解压即用）
+            - **impel-${{ github.ref_name }}.zip**：客户端 Impel（含 ImpelUpdater 自更新器）
+            - **repel-${{ github.ref_name }}.zip**：局域网服务端 Repel（RepelService + RepelUpdater + RepelControl + repelView，含 repel.json 模板）
+            - **propel-${{ github.ref_name }}.zip**：Propel 发布源（PropelService + PropelControl，含 propel.json 模板）
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
