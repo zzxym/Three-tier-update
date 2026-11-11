@@ -2,14 +2,15 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.ServiceProcess;
 
 namespace RepelUpdater
 {
     /// <summary>
-    /// Repel 服务端独立自更新器：由 RepelService 在退出前拉起，负责「停服 → 备份 → 替换 → 启动服务 → 回滚」。
-    /// 零外部依赖（不引用 Newtonsoft.Json）。RepelUpdater.exe 自身与 repel.json 不在替换清单内（跳过），避免写锁与覆盖用户配置。
+    /// Repel 服务端独立自更新器：由 RepelService 在退出前拉起，负责「停服 → 关闭 GUI → 备份 → 替换 → 启动服务 → 重启 GUI → 回滚」。
+    /// 零外部依赖（不引用 Newtonsoft.Json）。repel.json 不在替换清单内（跳过）以免覆盖用户配置；其余文件（含 RepelUpdater 自身、RepelControl、repelView）一律切换到新版本——升级前先关闭运行中的 GUI 进程，替换完成后再拉起到当前用户会话。
     /// </summary>
     internal static class Program
     {
@@ -20,6 +21,8 @@ namespace RepelUpdater
         private static string _service;
         private static string _logPath;
         private static readonly List<string> _replaced = new List<string>();
+        // 升级前在运行的 GUI 进程 exe 路径（仅这些会在升级后重启，避免"未打开的被拉起"）
+        private static readonly List<string> _guiToRestart = new List<string>();
 
         private static int Main(string[] args)
         {
@@ -34,8 +37,10 @@ namespace RepelUpdater
 
                 StopService();
                 var entries = ReadManifest();
+                CloseGuiProcesses(entries);
                 Replace(entries);
                 StartService();
+                RestartGuiProcesses();
 
                 Commit();
                 Log("Repel 自更新成功");
@@ -91,6 +96,143 @@ namespace RepelUpdater
             catch (Exception ex) { Log("启动服务异常：" + ex.Message); }
         }
 
+        /// <summary>升级前关闭会被替换的 GUI 进程（RepelControl / repelView 等），仅记录"更新前确实在运行"的 exe 以便稍后重启。</summary>
+        private static void CloseGuiProcesses(List<Entry> entries)
+        {
+            foreach (var e in entries)
+            {
+                if (!e.Rel.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) continue;
+                var name = Path.GetFileNameWithoutExtension(e.Rel);
+                if (name.Equals("RepelUpdater", StringComparison.OrdinalIgnoreCase)) continue; // 自身不在此关闭
+                if (name.Equals("RepelService", StringComparison.OrdinalIgnoreCase)) continue;  // 服务由 StopService 处理
+                bool running = false;
+                foreach (var p in Process.GetProcessesByName(name))
+                {
+                    running = true;
+                    try
+                    {
+                        p.CloseMainWindow();
+                        if (!p.WaitForExit(3000)) p.Kill();
+                    }
+                    catch { try { p.Kill(); } catch { } }
+                }
+                if (running) _guiToRestart.Add(SafePath(_dir, e.Rel));
+            }
+        }
+
+        /// <summary>升级后把此前在运行的 GUI 拉起（以新版本运行）；优先启动到当前交互用户会话，失败回退本会话。</summary>
+        private static void RestartGuiProcesses()
+        {
+            foreach (var exe in _guiToRestart)
+            {
+                try
+                {
+                    if (!File.Exists(exe)) continue;
+                    if (!StartInUserSession(exe))
+                        Process.Start(new ProcessStartInfo(exe) { WorkingDirectory = Path.GetDirectoryName(exe) });
+                }
+                catch (Exception ex) { Log("重启 " + exe + " 失败：" + ex.Message); }
+            }
+        }
+
+        [DllImport("wtsapi32.dll", SetLastError = true)]
+        private static extern bool WTSQueryUserToken(uint sessionId, out IntPtr phToken);
+        [DllImport("kernel32.dll")]
+        private static extern uint WTSGetActiveConsoleSessionId();
+        [DllImport("advapi32.dll", SetLastError = true)]
+        private static extern bool DuplicateTokenEx(IntPtr hExistingToken, uint dwDesiredAccess, IntPtr lpTokenAttributes, int impersonationLevel, int tokenType, out IntPtr phNewToken);
+        [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        private static extern bool CreateProcessAsUser(IntPtr hToken, string lpApplicationName, string lpCommandLine, IntPtr lpProcessAttributes, IntPtr lpThreadAttributes, bool bInheritHandles, uint dwCreationFlags, IntPtr lpEnvironment, string lpCurrentDirectory, ref STARTUPINFO lpStartupInfo, out PROCESS_INFORMATION lpProcessInformation);
+        [DllImport("userenv.dll", SetLastError = true)]
+        private static extern bool CreateEnvironmentBlock(out IntPtr lpEnvironment, IntPtr hToken, bool bInherit);
+        [DllImport("userenv.dll", SetLastError = true)]
+        private static extern bool DestroyEnvironmentBlock(IntPtr lpEnvironment);
+        [DllImport("kernel32.dll")]
+        private static extern bool CloseHandle(IntPtr hObject);
+
+        private const uint TOKEN_DUPLICATE = 0x0002;
+        private const uint TOKEN_QUERY = 0x0008;
+        private const uint TOKEN_ASSIGN_PRIMARY = 0x0001;
+        private const uint TOKEN_ADJUST_DEFAULT = 0x0080;
+        private const uint TOKEN_ADJUST_SESSIONID = 0x0100;
+        private const int SECURITY_IMPERSONATION = 2;
+        private const int TOKEN_PRIMARY = 1;
+        private const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
+        private const uint CREATE_NEW_CONSOLE = 0x00000010;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct STARTUPINFO
+        {
+            public int cb;
+            public IntPtr lpReserved;
+            public string lpDesktop;
+            public IntPtr lpTitle;
+            public uint dwX;
+            public uint dwY;
+            public uint dwXSize;
+            public uint dwYSize;
+            public uint dwXCountChars;
+            public uint dwYCountChars;
+            public uint dwFillAttribute;
+            public uint dwFlags;
+            public short wShowWindow;
+            public short cbReserved2;
+            public IntPtr lpReserved2;
+            public IntPtr hStdInput;
+            public IntPtr hStdOutput;
+            public IntPtr hStdError;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PROCESS_INFORMATION
+        {
+            public IntPtr hProcess;
+            public IntPtr hThread;
+            public uint dwProcessId;
+            public uint dwThreadId;
+        }
+
+        /// <summary>用当前交互用户令牌在用户桌面会话启动进程，避免服务会话 session 0 隔离导致 GUI 不可见。</summary>
+        private static bool StartInUserSession(string exe)
+        {
+            try
+            {
+                uint sessionId = WTSGetActiveConsoleSessionId();
+                if (sessionId == 0xFFFFFFFF) return false;
+                if (!WTSQueryUserToken(sessionId, out IntPtr userToken)) return false;
+                try
+                {
+                    uint desired = TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID;
+                    if (!DuplicateTokenEx(userToken, desired, IntPtr.Zero, SECURITY_IMPERSONATION, TOKEN_PRIMARY, out IntPtr primaryToken))
+                        return false;
+                    try
+                    {
+                        if (!CreateEnvironmentBlock(out IntPtr env, primaryToken, false))
+                            env = IntPtr.Zero;
+                        try
+                        {
+                            var si = new STARTUPINFO();
+                            si.cb = Marshal.SizeOf(si);
+                            si.lpDesktop = "winsta0\\default";
+                            var pi = new PROCESS_INFORMATION();
+                            bool ok = CreateProcessAsUser(primaryToken, exe, null, IntPtr.Zero, IntPtr.Zero, false,
+                                CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_CONSOLE, env, Path.GetDirectoryName(exe), ref si, out pi);
+                            if (ok)
+                            {
+                                CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+                                return true;
+                            }
+                            return false;
+                        }
+                        finally { if (env != IntPtr.Zero) DestroyEnvironmentBlock(env); }
+                    }
+                    finally { CloseHandle(primaryToken); }
+                }
+                finally { CloseHandle(userToken); }
+            }
+            catch { return false; }
+        }
+
         private static List<Entry> ReadManifest()
         {
             var mf = Path.Combine(_stage, "files.lst");
@@ -120,8 +262,6 @@ namespace RepelUpdater
         {
             foreach (var e in entries)
             {
-                if (Path.GetFileName(e.Rel).Equals("RepelUpdater.exe", StringComparison.OrdinalIgnoreCase))
-                    continue;   // 不替换自身（运行中的 exe 不可写）
                 if (e.Rel.Equals("repel.json", StringComparison.OrdinalIgnoreCase))
                     continue;   // 不覆盖用户配置
                 var dest = SafePath(_dir, e.Rel);
