@@ -7,8 +7,8 @@
     <AssemblyName>RepelUpdater</AssemblyName>
     <RootNamespace>RepelUpdater</RootNamespace>
     <LangVersion>latest</LangVersion>
-    <Version>26.1.4</Version>
-    <InformationalVersion>26.1.4</InformationalVersion>
+    <Version>26.2.1</Version>
+    <InformationalVersion>26.2.1</InformationalVersion>
     <!-- 输出到 RepelService 部署目录，便于随服务端一起发布 -->
     <OutputPath>..\RepelService\bin\Release\net48\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
