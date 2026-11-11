@@ -20,7 +20,7 @@ namespace RepelUpdater
         private static string _stage;
         private static string _service;
         private static string _logPath;
-        private static readonly List<string> _replaced = new List<string>();
+        private static readonly List<(string Dest, string Bak)> _replaced = new List<(string, string)>();
         // 升级前在运行的 GUI 进程 exe 路径（仅这些会在升级后重启，避免"未打开的被拉起"）
         private static readonly List<string> _guiToRestart = new List<string>();
 
@@ -112,9 +112,9 @@ namespace RepelUpdater
                     try
                     {
                         p.CloseMainWindow();
-                        if (!p.WaitForExit(3000)) p.Kill();
+                        if (!p.WaitForExit(3000)) { p.Kill(); p.WaitForExit(5000); }
                     }
-                    catch { try { p.Kill(); } catch { } }
+                    catch { try { p.Kill(); p.WaitForExit(5000); } catch { } }
                 }
                 if (running) _guiToRestart.Add(SafePath(_dir, e.Rel));
             }
@@ -267,11 +267,16 @@ namespace RepelUpdater
                 var dest = SafePath(_dir, e.Rel);
                 var src = SafePath(_stage, e.Rel);
                 if (!File.Exists(src)) throw new Exception("缺少升级文件：" + e.Rel);
+                // 上次升级残留的 .bak（可能被仍在运行的进程锁定）不得阻塞本次升级：删除失败则换唯一名
                 var bak = dest + ".bak";
-                if (File.Exists(bak)) { try { File.Delete(bak); } catch { } }
+                if (File.Exists(bak))
+                {
+                    try { File.Delete(bak); }
+                    catch { bak = dest + ".bak_" + Guid.NewGuid().ToString("N").Substring(0, 8); }
+                }
                 // 运行中的 exe 可同卷重命名但不可删：先用 Move 腾出目标名
                 if (File.Exists(dest)) File.Move(dest, bak);
-                _replaced.Add(dest);
+                _replaced.Add((dest, bak));
                 try
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(dest));
@@ -285,8 +290,7 @@ namespace RepelUpdater
         {
             for (int i = _replaced.Count - 1; i >= 0; i--)
             {
-                var dest = _replaced[i];
-                var bak = dest + ".bak";
+                var (dest, bak) = _replaced[i];
                 try
                 {
                     if (File.Exists(dest)) File.Delete(dest);
@@ -298,8 +302,8 @@ namespace RepelUpdater
 
         private static void Commit()
         {
-            foreach (var dest in _replaced)
-                try { var bak = dest + ".bak"; if (File.Exists(bak)) File.Delete(bak); } catch { }
+            foreach (var (dest, bak) in _replaced)
+                try { if (File.Exists(bak)) File.Delete(bak); } catch { }
             try { Directory.Delete(_stage, true); } catch { }
         }
 

@@ -21,8 +21,8 @@ namespace ImpelUpdater
         private static string _dir;
         private static string _stage;
         private static string _logPath;
-        // 已动过的目标文件，用于失败时逐个回滚（含"原本不存在的新增文件"）
-        private static readonly List<string> _replaced = new List<string>();
+        // 已动过的目标文件（含实际备份名），用于失败时逐个回滚（含"原本不存在的新增文件"）
+        private static readonly List<(string Dest, string Bak)> _replaced = new List<(string, string)>();
 
         private static int Main(string[] args)
         {
@@ -156,15 +156,16 @@ namespace ImpelUpdater
             {
                 var dest = SafePath(_dir, e.Rel);
                 var src = SafePath(_stage, e.Rel);
+                // 上次升级残留的 .bak（可能被其他进程锁定）不得阻塞本次升级：删除失败则换唯一名
                 var bak = dest + ".bak";
                 if (File.Exists(bak))
                 {
                     try { File.Delete(bak); }
-                    catch (Exception ex) { throw new Exception("无法清理上次残留备份 " + bak + "：" + ex.Message); }
+                    catch { bak = dest + ".bak_" + Guid.NewGuid().ToString("N").Substring(0, 8); }
                 }
                 // 运行中的 exe 可以同卷重命名，但不能删除：用 Move 腾出目标名
                 if (File.Exists(dest)) File.Move(dest, bak);
-                _replaced.Add(dest);
+                _replaced.Add((dest, bak));
                 try
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(dest));
@@ -194,8 +195,7 @@ namespace ImpelUpdater
         {
             for (int i = _replaced.Count - 1; i >= 0; i--)
             {
-                var dest = _replaced[i];
-                var bak = dest + ".bak";
+                var (dest, bak) = _replaced[i];
                 try
                 {
                     if (File.Exists(dest)) File.Delete(dest);
@@ -213,8 +213,8 @@ namespace ImpelUpdater
 
         private static void Commit()
         {
-            foreach (var dest in _replaced)
-                try { var bak = dest + ".bak"; if (File.Exists(bak)) File.Delete(bak); } catch { }
+            foreach (var (dest, bak) in _replaced)
+                try { if (File.Exists(bak)) File.Delete(bak); } catch { }
             try { Directory.Delete(_stage, true); } catch { }
         }
 
