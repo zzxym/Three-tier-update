@@ -22,6 +22,12 @@ namespace Impel
             cfg.p2p = cfg.p2p ?? new P2PCfg();
             cfg.apps = cfg.apps ?? new List<AppCfg>();
             cfg.installed = cfg.installed ?? new Dictionary<string, string>();
+            // 稳定的客户端标识：Repel 按 cid 定向下发升级指令；持久化到 Impel.json，重启后保持不变
+            if (string.IsNullOrWhiteSpace(cfg.clientId))
+            {
+                cfg.clientId = Guid.NewGuid().ToString("N");
+                try { Save(cfg); } catch { }
+            }
             return cfg;
         }
 

@@ -42,6 +42,7 @@ Propel（中心源 / 发布源）  ──►  Repel（分支 / 缓存 / P2P 注�
 ```
 /
   Impel/           客户端：悬浮坞、更新引擎、P2P 提供端、配置、图标、启动器、设置
+  ImpelUpdater/    客户端独立升级器：旧进程退出后替换 impel.exe，失败自动回滚
   RepelService/    HTTP P2P 注册 / 缓存服务（回源 Propel 并磁盘缓存，提供 peer 查询）
   RepelControl/    管控台（维护 repel.lst 注册表）
   repelView/       查看器（查看分发清单 / 缓存状态）
@@ -58,6 +59,7 @@ Propel（中心源 / 发布源）  ──►  Repel（分支 / 缓存 / P2P 注�
 ```powershell
 # 客户端（编译后直接产出到 dist/impel）
 dotnet build -c Release Impel/Impel.csproj
+dotnet build -c Release ImpelUpdater/ImpelUpdater.csproj
 
 # 服务端与工具
 dotnet build -c Release RepelService/RepelService.csproj
@@ -87,6 +89,47 @@ dotnet build -c Release repelView/repelView.csproj
 2. 对每个应用逐文件 `sha256` 比对，缺失 / 不一致的从 Repel（P2P 或回源 Propel）下载。
 3. **全部文件下载成功**才落盘 `manifest.json` 并记录已装版本；部分失败不误报「已最新」。
 4. 软件正在运行时跳过更新；本地文件损坏（哈希不符）自动重新下载修复。
+
+## 客户端自更新（Repel → Impel）
+
+客户端程序本身的升级**不经过** `all.lst` / `repel.lst`：否则它会作为应用出现在用户菜单里，且可能覆盖 `Impel.json` 等用户配置。改用一组独立端点：
+
+| 端点 | 鉴权 | 用途 |
+|---|---|---|
+| `GET /impel/version` | 数据 token | 当前升级包版本与文件清单（含 sha256） |
+| `GET /impel/file?path=` | 数据 token | 只下发清单内登记的文件 |
+| `GET /admin/impel/clients` | `X-Admin-Token` | 在线客户端标识 / 版本 / 计算机名 |
+| `POST /admin/impel/upgrade` | `X-Admin-Token` | 立即唤醒所选客户端（或全部）重新检查升级基线，可选 `target` 指定单台 |
+
+**配置**：在 `repel.json` 增加 `adminToken`，或在 `RepelControl` 的「管理密钥」中输入新值并保存。管控台**不会回显**已配置的密钥，只显示「已配置 / 未配置」；密码框留空保存表示不修改已有密钥。该密钥由管理端独占，**不得**与所有 Impel 客户端共享的 `tokens` 相同；未配置时管理端点一律返回 503。**保存配置时若未配置管理密钥，管控台会弹出警告并默认取消保存**，避免误存无鉴权状态。
+
+**发布流程**：
+
+1. 构建新版客户端（产出 `dist/impel`，含 `impel.exe` 与 `ImpelUpdater.exe`）。
+2. 在部署 Repel 的机器上打开 `RepelControl` →「导入新版客户端包」→ 选中新版目录下的 `impel.exe`。程序文件会被复制到与 `RepelService.exe` 同目录的 `impelpkg/`，并生成带 sha256 的 `version.json`。
+3. 导入升级包即设定「版本基线」（`impelpkg/version.json` 的 `version`）；客户端下一次 `/changes` 长轮询会自动比对并升级，离线机器开机即升。点「立即同步升级」可立即唤醒所选客户端检查基线（免去最长 90 秒等待），无需手动逐个下发。
+
+**客户端执行**：Impel 在 `/changes` 长轮询中上报稳定的 `clientId` 与自身版本；收到 `cmd=upgrade` 后先用 `lastCmdId` 去重，空闲时下载整包到 `SelfUpdate.staging` 并逐文件校验，随后拉起 `ImpelUpdater.exe` 并退出。updater 等待旧进程与单实例互斥体释放，备份原文件（`.bak`）→ 替换 → 启动新版 → 8 秒内确认存活；失败自动回滚并重新启动旧版。过程记录在 `%LOCALAPPDATA%\Impel\selfupdate.log`。
+
+**约束**：
+
+- `ImpelUpdater.exe` 不参与自更新（只随客户端安装包分发），避免替换正在运行的自身；旧客户端若缺此文件会跳过升级。
+- 版本基线持久化在 `impelpkg/version.json`，服务重启不丢、无 TTL、无内存队列；离线客户端无论隔多久上线，首次长轮询即被拉平到基线版本。
+- 客户端收到 `cmd=upgrade` 后用 `lastCmdId` 去重（cmdId 为基线版本号），升级成功后版本与基线一致即不再收到指令；正在更新第三方应用时暂缓，下一轮再取。
+- `impelpkg/` 只含程序文件，`Impel.json`、`*.log`、`hashcache.json`、`*.lst` 等用户数据不入包。
+
+### 由 Propel 自动发起升级
+
+把升级的「发起方」从人工在 RepelControl 导入，上移到 Propel（中心源），实现「发布即全网升级」：
+
+- **PropelControl** 新增「发布 Impel 升级包」「发布 Repel 升级包」：选构建产物目录后，自动计算各文件 sha256 并生成 `Root/impel/version.json`、`Root/repel/version.json`，把程序文件拷贝到 `Root/impel/`、`Root/repel/`（自动排除 `Impel.json`/`repel.json` 等用户数据与 `*.log`/`*.bak` 临时文件）。
+- **RepelService** 每 60 秒检查 Propel 上的两个 `version.json`（沿用 `source` 指向的 Propel 地址，并带同样的数据 token）：
+  - `impel/`：比本地 `impelpkg/` 基线更新则自动拉取整包覆盖 → Impel 客户端按既有基线机制自动升级（**全自动**，无需管理员逐个导入或点「立即同步」）。
+  - `repel/`：比自身版本更新则拉取整包到 `RepelUpdate.staging/`，启动 `RepelUpdater.exe` 停服 → 替换 → 重启服务（**服务端自更新**）。
+- **RepelUpdater** 与 **ImpelUpdater** 自身不参与替换（运行中的 exe 不可写）；`repel.json` 等用户配置在替换时被显式跳过，永不覆盖。
+- 所有下载文件均经 sha256 校验（与 `version.json` 清单比对），保证完整性。
+
+> 前提：Repel 的 `repel.json` 已配置 `source` 指向 Propel 地址；PropelService **无需改动**（它本就是发布根目录的静态文件服务，可分发任意子目录）。
 
 ## 说明
 

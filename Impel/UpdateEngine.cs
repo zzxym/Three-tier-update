@@ -46,6 +46,9 @@ namespace Impel
         public static bool IsUpdating(string appId)
         { return !string.IsNullOrEmpty(appId) && _activeUpdates.ContainsKey(appId); }
 
+        /// <summary>是否存在任意进行中的应用更新：自更新必须避开下载/写盘窗口，避免半成品文件。</summary>
+        public static bool HasActiveUpdates() => !_activeUpdates.IsEmpty;
+
         // 下载速率上报用的轻量 HTTP 客户端（短超时，不阻塞下载）
         static readonly HttpClient _speedHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
 
@@ -133,11 +136,14 @@ namespace Impel
             return false;
         }
 
-        /// <summary>长轮询等待 Repel 菜单列表变更：自 since 起有变化立即返回 changed=true；否则服务端挂起至超时（或变更）才返回。
+        /// <summary>长轮询等待 Repel 菜单列表变更，并上报本机 clientId/版本以接收定向下发的自更新指令。
         /// ok=false 表示 Repel 不可用/不支持该端点（调用方据此退避重试）。</summary>
-        public static (bool ok, bool changed, long version) WaitMenuChange(ImpelConfig cfg, long since, int timeoutSec = 90)
+        public static ChangeResult WaitMenuChange(ImpelConfig cfg, long since, int timeoutSec = 90)
         {
-            var url = RepelBase(cfg) + "/changes?since=" + since;
+            var r = new ChangeResult { version = since };
+            var url = RepelBase(cfg) + "/changes?since=" + since
+                + "&cid=" + Uri.EscapeDataString(cfg.clientId ?? "")
+                + "&cv=" + Uri.EscapeDataString(ClientInfo.Version);
             if (!string.IsNullOrEmpty(cfg.server.token)) url += "&token=" + Uri.EscapeDataString(cfg.server.token);
             try
             {
@@ -146,15 +152,18 @@ namespace Impel
                 using (var resp = (HttpWebResponse)req.GetResponse())
                 using (var sr = new StreamReader(resp.GetResponseStream()))
                 {
-                    if (resp.StatusCode != HttpStatusCode.OK) return (true, false, since);
-                    var json = sr.ReadToEnd();
-                    var o = JObject.Parse(json);
-                    long ver = (long)(o["version"] ?? since);
-                    bool changed = (bool)(o["changed"] ?? false);
-                    return (true, changed, ver);
+                    if (resp.StatusCode != HttpStatusCode.OK) { r.ok = true; return r; }
+                    var o = JObject.Parse(sr.ReadToEnd());
+                    r.version = (long)(o["version"] ?? since);
+                    r.changed = (bool)(o["changed"] ?? false);
+                    r.cmd = (string)o["cmd"] ?? "";
+                    r.cmdId = (string)o["cmdId"] ?? "";
+                    r.pkgVersion = (string)o["pkgVersion"] ?? "";
+                    r.ok = true;
+                    return r;
                 }
             }
-            catch { return (false, false, since); }
+            catch { return r; }
         }
 
         /// <summary>从 Repel 拉取应用列表。返回 (ok, list)：ok 表示 Repel 可达且成功返回；list 为 null 表示拉取失败（用于触发本地兜底）。</summary>

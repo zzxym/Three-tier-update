@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -12,13 +13,14 @@ using Newtonsoft.Json.Linq;
 
 namespace RepelControl
 {
-    class RepelCfg { public int port; public string source; public string tokens; public string cache; }
+    class RepelCfg { public int port; public string source; public string tokens; public string cache; public string adminToken = ""; }
 
     public partial class MainWindow : Window
     {
         private const string SvcName = "Repel";
         private const string SvcExe = "RepelService.exe";
         private string _lastStatus = "";
+        private string _adminToken = "";   // 管理密钥只在内存中保存，界面永不回显
 
         public MainWindow()
         {
@@ -30,6 +32,7 @@ namespace RepelControl
                 if (Height > max) Height = max;
                 MaxHeight = max;
             };
+            pwdAdminToken.PasswordChanged += (s, e) => UpdateAdminTokenState();
             LoadCfg();
             RefreshStatus();
         }
@@ -50,6 +53,13 @@ namespace RepelControl
         private void Log(string fmt, params object[] a) => Log(string.Format(fmt, a));
 
         // ---------------- 配置读写 ----------------
+        /// <summary>管理密钥永不回显：界面只显示状态，实际值保存在内存 _adminToken 中供管理端点请求使用。</summary>
+        private void UpdateAdminTokenState()
+        {
+            if (pwdAdminToken.Password.Length > 0) lblAdminTokenState.Text = "输入新密钥（保存后生效）";
+            else lblAdminTokenState.Text = _adminToken.Length > 0 ? "已配置（留空不修改）" : "未配置";
+        }
+
         private void LoadCfg()
         {
             try
@@ -62,6 +72,8 @@ namespace RepelControl
                 if (!string.IsNullOrEmpty(cfg.source)) txtSource.Text = cfg.source;
                 if (cfg.tokens != null) txtTokens.Text = cfg.tokens;
                 if (!string.IsNullOrEmpty(cfg.cache)) txtCache.Text = cfg.cache;
+                if (cfg.adminToken != null) _adminToken = cfg.adminToken;
+                UpdateAdminTokenState();
                 Log("已读取 repel.json：" + ExeDir);
             }
             catch (Exception ex) { Log("读取配置失败：" + ex.Message); }
@@ -77,9 +89,27 @@ namespace RepelControl
                 // 保留已有 selfUrl（若有），避免热重载把自身节点地址复位为空（多网卡/反代场景回退 Host 头可能不准）
                 string existingSelfUrl = "";
                 try { var ex = JObject.Parse(File.ReadAllText(Path.Combine(ExeDir, "repel.json"))); existingSelfUrl = (string)ex["selfUrl"] ?? ""; } catch { }
-                var obj = new { port = port, source = txtSource.Text.Trim(), tokens = txtTokens.Text.Trim(), cache = txtCache.Text.Trim(), selfUrl = existingSelfUrl };
+                // 密码框留空表示保持已有密钥，避免"打开管控台点一次保存就把密钥清空"
+                var typed = pwdAdminToken.Password.Trim();
+                if (typed.Length > 0) _adminToken = typed;
+
+                // 未配置管理密钥时强烈提醒：保存后 /admin/* 将完全无鉴权，任何能连到服务端口的客户端都能下发升级
+                if (_adminToken.Length == 0)
+                {
+                    var r = System.Windows.MessageBox.Show(
+                        "未配置管理密钥（adminToken）。\n\n保存后，/admin/impel 管理端点将完全无鉴权——任何能连到服务端口的客户端（含本机运行的 impel.exe）都能查看在线列表并下发客户端升级指令（远程替换可执行文件）。\n\n建议先输入一个与服务端共享数据 token 不同的密钥再保存。\n\n仍以无密钥状态保存？",
+                        "管理密钥未配置",
+                        System.Windows.MessageBoxButton.YesNo,
+                        System.Windows.MessageBoxImage.Warning,
+                        System.Windows.MessageBoxResult.No);
+                    if (r != System.Windows.MessageBoxResult.Yes) { Log("已取消保存：未配置管理密钥"); return; }
+                }
+
+                var obj = new { port = port, source = txtSource.Text.Trim(), tokens = txtTokens.Text.Trim(), cache = txtCache.Text.Trim(), selfUrl = existingSelfUrl, adminToken = _adminToken };
                 File.WriteAllText(Path.Combine(ExeDir, "repel.json"),
                     JsonConvert.SerializeObject(obj, Formatting.Indented));
+                pwdAdminToken.Clear();
+                UpdateAdminTokenState();
                 Log("已写入 repel.json：" + ExeDir);
             }
             catch (Exception ex) { Log("写入配置失败：" + ex.Message); }

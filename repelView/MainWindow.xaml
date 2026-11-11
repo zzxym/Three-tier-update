@@ -101,6 +101,7 @@
                           HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="客户端" Binding="{Binding HostText}" Width="130"/>
+                        <DataGridTextColumn Header="版本" Binding="{Binding version}" Width="100"/>
                         <DataGridTextColumn Header="地址" Binding="{Binding providerUrl}" Width="220"/>
                         <DataGridTextColumn Header="应用数" Binding="{Binding AppsText}" Width="70"/>
                         <DataGridTextColumn Header="哈希数" Binding="{Binding HashesText}" Width="70"/>

@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 无控制台窗口：自更新过程只写 repelupdate.log，避免黑框闪现 -->
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>RepelUpdater</AssemblyName>
+    <RootNamespace>RepelUpdater</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <!-- 输出到 RepelService 部署目录，便于随服务端一起发布 -->
+    <OutputPath>..\RepelService\bin\Release\net48\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.ServiceProcess" />
+  </ItemGroup>
+
+  <!-- 与 RepelService.exe 同目录部署；不生成多余的 exe.config / pdb -->
+  <Target Name="TrimOutput" AfterTargets="Build">
+    <ItemGroup>
+      <_UpPdbFiles Include="$(OutDir)RepelUpdater.pdb" />
+    </ItemGroup>
+    <Delete Files="@(_UpPdbFiles)" />
+    <Delete Files="$(OutDir)RepelUpdater.exe.config" Condition="Exists('$(OutDir)RepelUpdater.exe.config')" />
+  </Target>
+
+</Project>

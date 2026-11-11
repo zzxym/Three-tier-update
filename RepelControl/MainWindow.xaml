@@ -1,7 +1,7 @@
 <Window x:Class="RepelControl.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="天一网络三层更新网吧服务端" Width="640" Height="640" MinHeight="480" MinWidth="560"
+        Title="天一网络三层更新网吧服务端" Width="640" Height="620" MinHeight="560" MinWidth="560"
         WindowStartupLocation="CenterScreen" ResizeMode="CanResize"
         FontFamily="Microsoft YaHei, 微软雅黑" FontSize="13"
         Background="#EFF3F9">
@@ -37,6 +37,25 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TextBox">
+                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6">
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="4,2"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="Pwd" TargetType="PasswordBox">
+            <Setter Property="Height" Value="30"/>
+            <Setter Property="Padding" Value="8,3"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="BorderBrush" Value="#D7DEEA"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Background" Value="#FBFCFE"/>
+            <Setter Property="PasswordChar" Value="●"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="PasswordBox">
                         <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6">
                             <ScrollViewer x:Name="PART_ContentHost" Margin="4,2"/>
@@ -114,6 +133,7 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="监听端口：" Style="{StaticResource FieldLabel}" Margin="0,0,12,0"/>
                     <TextBox Grid.Row="0" Grid.Column="1" x:Name="txtPort" Text="80" Style="{StaticResource Txt}"/>
@@ -123,6 +143,17 @@
                     <TextBox Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="3" x:Name="txtSource" Text="https://propel.xiaolin.cc:81" Style="{StaticResource Txt}" Margin="0,10,0,0"/>
                     <TextBlock Grid.Row="2" Grid.Column="0" Text="鉴权 tokens：" Style="{StaticResource FieldLabel}" Margin="0,10,12,0"/>
                     <TextBox Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3" x:Name="txtTokens" Style="{StaticResource Txt}" Margin="0,10,0,0"/>
+                    <TextBlock Grid.Row="3" Grid.Column="0" Text="管理密钥：" Style="{StaticResource FieldLabel}" Margin="0,10,12,0"/>
+                    <Grid Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="3" Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <PasswordBox Grid.Column="0" x:Name="pwdAdminToken" Style="{StaticResource Pwd}"
+                                     ToolTip="仅在需要修改密钥时输入；留空表示保持 repel.json 中已有的密钥，界面不会回显。"/>
+                        <TextBlock Grid.Column="1" x:Name="lblAdminTokenState" Text="未配置" Margin="10,0,0,0"
+                                   VerticalAlignment="Center" Foreground="#52607A" FontSize="12"/>
+                    </Grid>
                 </Grid>
             </StackPanel>
         </Border>

@@ -21,6 +21,7 @@ namespace RepelView
         public int hashes { get; set; }
         public bool online { get; set; }
         public string lastSeenUtc { get; set; }
+        public string version { get; set; } = "-";   // 客户端版本号（Diag 按 IP 关联下发，空时显示“-”）
         private string _hostText = "-";
         public string HostText { get { return _hostText; } set { _hostText = value; OnChanged("HostText"); } }
         private string _lastSeenDisplay = "-";
@@ -233,6 +234,7 @@ namespace RepelView
                 foreach (var p in d.peers)
                 {
                     p.HostText = string.IsNullOrEmpty(p.host) ? "-" : p.host;
+                    p.version = string.IsNullOrEmpty(p.version) ? "-" : p.version;
                     p.LastSeenDisplay = ParseUtc(p.lastSeenUtc);
                     p.AppsText = p.apps.ToString();
                     p.HashesText = p.hashes.ToString();
@@ -253,6 +255,7 @@ namespace RepelView
                 providerUrl = d.selfUrl,
                 host = "本机",
                 HostText = "本机",
+                version = "-",
                 apps = d.cache?.apps ?? 0,
                 hashes = d.cache?.hashes ?? 0,
                 online = true,

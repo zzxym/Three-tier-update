@@ -37,6 +37,9 @@ namespace Impel
         public bool logging = false;   // 日志开关：默认关，不写 impel.log
         public List<AppCfg> apps = new List<AppCfg>();
         public Dictionary<string, string> installed = new Dictionary<string, string>();   // 各应用已安装版本（key=appId），成功更新后写入，用于稳定判断“已最新”
+        // ===== 客户端自更新 =====
+        public string clientId = "";     // 稳定客户端标识：Repel 据此定向下发升级指令（重启后不变）
+        public string lastCmdId = "";    // 已执行过的升级指令 id：防止重启后重复升级形成循环
     }
 
     /// <summary>下载/更新进度（文件级 + 当前文件字节级）。</summary>

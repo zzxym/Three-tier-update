@@ -27,6 +27,8 @@ jobs:
       - name: Build all projects (Release)
         run: |
           dotnet build -c Release Impel/Impel.csproj
+          # 独立 updater 直接产出到 dist/impel，随客户端安装包一起分发
+          dotnet build -c Release ImpelUpdater/ImpelUpdater.csproj
           dotnet build -c Release RepelService/RepelService.csproj
           dotnet build -c Release PropelService/PropelService.csproj
           dotnet build -c Release RepelControl/RepelControl.csproj

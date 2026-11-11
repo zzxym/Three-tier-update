@@ -9,6 +9,8 @@ using System.Text;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Security.Cryptography;
+using System.Diagnostics;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -19,11 +21,13 @@ namespace RepelService
     /// - POST /peer/register：写入/续期内存注册表 {appId → {hash → [providerUrl]}}（20min 过期，impel 每 5 分钟续注册）
     /// - GET  /peer/query?appId=&amp;hash=：返回 candidate providerUrl 列表（真实 peer 在前，末尾追加中心缓存自身作为一员）
     /// - GET  /&lt;appid&gt;/...：命中本地缓存直供，未命中回源(Propel) 取来直供并落盘缓存
+    /// - GET  /impel/version、/impel/file：客户端自更新包（独立于 all.lst/repel.lst 的软件分发）
+    /// - GET|POST /admin/impel/*：管理面，校验 X-Admin-Token（repel.json 的 adminToken），与数据 token 完全隔离
     /// token 鉴权：任意合法 token 均可（扁平；未配置 tokens 时宽松放行，便于本地测试）
     /// 启动方式：默认读同目录 repel.json，命令行参数可覆盖；直接运行=前台，作为 Windows 服务运行=后台。
     /// </summary>
     class PeerEntry { public string ProviderUrl; public DateTime ExpireAt; }
-    class RegisterBody { public string appId = null; public string version = null; public List<string> hashes = null; public string providerUrl = null; public string host = null; }
+    class RegisterBody { public string appId = null; public string version = null; public List<string> hashes = null; public string providerUrl = null; public string host = null; public string clientId = null; }
 
     class RepelConfig
     {
@@ -33,6 +37,7 @@ namespace RepelService
         public string cache = "cache";
         public string selfUrl = "";   // 中心缓存对外可达地址（如 http://192.168.40.121:81）。为空时由请求 Host 头推导。
                                        // 用于把 Repel 自身作为一个 P2P 节点注入 /peer/query 返回，使其在节点统计与下载候选中与真实 peer 并列。
+        public string adminToken = "";   // 管理端独立密钥：仅 /admin/* 校验，绝不复用所有客户端共享的数据 token
         public static RepelConfig Load()
         {
             var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "repel.json");
@@ -52,6 +57,7 @@ namespace RepelService
         public static string Tokens = "";
         public static string CacheDir = "cache";
         public static string SelfUrl = "";   // 中心缓存作为 P2P 节点时的对外地址
+        public static string AdminToken = "";   // 管理端独立密钥（repel.json 的 adminToken，热更新生效）
         static volatile HashSet<string> Auth = new(StringComparer.OrdinalIgnoreCase);
         static readonly Dictionary<string, Dictionary<string, List<PeerEntry>>> Registry =
             new(StringComparer.OrdinalIgnoreCase);
@@ -63,8 +69,19 @@ namespace RepelService
         static FileSystemWatcher _lstWatcher;
         static Timer _reloadTimer;
         static long _menuVersion = 0;                                  // 菜单列表版本号（每次变更自增）
-        static readonly List<TaskCompletionSource<bool>> _waiters = [];
+        // 挂起的长轮询等待者：1=菜单变更唤醒，2=基线同步唤醒（立即让客户端重新检查升级基线）
+        class Waiter { public TaskCompletionSource<int> Tcs = new(); public string Cid = ""; }
+        static readonly List<Waiter> _waiters = [];
         static readonly object _wlock = new();
+
+        // ===== 客户端自更新：版本基线模式 =====
+        class ClientRec { public string Version = ""; public string Host = ""; public string Ip = ""; public DateTime Last; }
+        static readonly Dictionary<string, ClientRec> _clients = new(StringComparer.OrdinalIgnoreCase);
+        static readonly object _adminLock = new();
+        // 升级包目录：与 RepelService.exe 同目录，由 RepelControl「导入客户端升级包」写入 version.json + 文件。
+        // version.json 中的 version 即「升级基线」：客户端长轮询上报自身版本，与服务端比对不一致即自动升级；
+        // 基线持久化在磁盘，服务重启不丢，离线客户端下次上线也会自动升级（无 TTL、无内存队列）。
+        static readonly string PkgDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "impelpkg");
         static readonly string LogFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "repel.log");
 
         // ===== 监控诊断所需状态 =====
@@ -126,6 +143,7 @@ namespace RepelService
 
             var cfg = RepelConfig.Load();
             Port = cfg.port; Source = cfg.source; Tokens = cfg.tokens; CacheDir = cfg.cache; SelfUrl = cfg.selfUrl;
+            AdminToken = cfg.adminToken ?? "";
             for (int i = 0; i < args.Length; i++)
             {
                 var a = args[i];
@@ -183,6 +201,7 @@ namespace RepelService
             SetupConfigWatcher();
             Task.Run(LstLoop);
             Task.Run(WarmCache);   // 启动即把 Propel 全部应用镜像到本地缓存（兜底）
+            Task.Run(AutoUpdateLoop);   // 周期检查 Propel 上的 Impel 基线与 Repel 自身版本，自动拉取/自更新
             return true;
         }
 
@@ -237,6 +256,7 @@ namespace RepelService
             {
                 var fresh = RepelConfig.Load();
                 Source = fresh.source; Tokens = fresh.tokens; CacheDir = fresh.cache; SelfUrl = fresh.selfUrl;
+                AdminToken = fresh.adminToken ?? "";
                 if (!Path.IsPathRooted(CacheDir))
                     CacheDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CacheDir);
                 ParseTokens();
@@ -267,12 +287,18 @@ namespace RepelService
                 var req = ctx.Request;
                 var path = req.Url.AbsolutePath;
                 var token = req.QueryString["token"] ?? "";
-                if (Auth.Count > 0 && !Auth.Contains(token)) { resp.StatusCode = 401; return; }
+                // 管理面使用独立 adminToken（X-Admin-Token 头），不复用所有客户端共享的数据 token
+                var isAdmin = path.TrimEnd('/').StartsWith("/admin/", StringComparison.OrdinalIgnoreCase);
+                if (!isAdmin && Auth.Count > 0 && !Auth.Contains(token)) { resp.StatusCode = 401; return; }
 
                 if (path.TrimEnd('/').EndsWith("/peer/register")) { Register(ctx); return; }
                 if (path.TrimEnd('/').EndsWith("/peer/query")) { Query(ctx); return; }
                 if (path.TrimEnd('/').EndsWith("/peer/speed")) { Speed(ctx); return; }
                 if (path.TrimEnd('/').EndsWith("/peer/online")) { Online(ctx); return; }
+                if (path.TrimEnd('/').EndsWith("/impel/version")) { ServeImpelVersion(ctx); return; }
+                if (path.TrimEnd('/').EndsWith("/impel/file")) { await ServeImpelFileAsync(ctx); return; }
+                if (path.TrimEnd('/').EndsWith("/admin/impel/clients")) { AdminClients(ctx); return; }
+                if (path.TrimEnd('/').EndsWith("/admin/impel/upgrade")) { AdminUpgrade(ctx); return; }
                 if (path.TrimEnd('/').EndsWith("/diag")) { Diag(ctx); return; }
                 if (path.TrimEnd('/').EndsWith("/probesource")) { await ProbeSourceAsync(ctx); return; }
                 if (path.TrimEnd('/').EndsWith("/changes")) { Interlocked.Increment(ref _changesRequests); await ServeChangesAsync(ctx); return; }
@@ -283,30 +309,52 @@ namespace RepelService
             finally { try { resp.Close(); } catch { } }
         }
 
-        /// <summary>长轮询端点：客户端带 since 版本号挂起；服务端列表变更（bump 版本）时立即返回 changed=true，否则最多挂起 90s。</summary>
+        /// <summary>长轮询端点：客户端带 since/cid/cv 挂起；菜单变更或定向升级指令到达时立即返回，否则最多挂起 90s。</summary>
         static async Task ServeChangesAsync(HttpListenerContext ctx)
         {
             try
             {
                 long.TryParse(ctx.Request.QueryString["since"] ?? "0", out long since);
-                long cur = Interlocked.Read(ref _menuVersion);
-                if (cur != since) // 版本已不同（含服务端重启归零），立即返回变更
+                var cid = ctx.Request.QueryString["cid"] ?? "";
+                var cv = ctx.Request.QueryString["cv"] ?? "";
+                RecordClient(cid, cv, SafeAddr(ctx.Request));
+
+                for (int loop = 0; loop < 4; loop++)
                 {
-                    WriteJson(ctx.Response, JsonConvert.SerializeObject(new { changed = true, version = cur }));
-                    return;
+                    // ===== 版本基线：客户端版本低于要求版本则自动下发升级 =====
+                    // 离线客户端上线时立即比对；导入新包后被唤醒的客户端也会在下一轮顶部重新比对。
+                    // 持久化在 impelpkg/version.json，服务重启不丢；无需内存队列、无 TTL。
+                    var pkg = LoadPackage();
+                    if (pkg != null && !string.Equals(cv ?? "", pkg.version, StringComparison.OrdinalIgnoreCase))
+                    {
+                        WriteJson(ctx.Response, JsonConvert.SerializeObject(new
+                        {
+                            changed = false,
+                            version = Interlocked.Read(ref _menuVersion),
+                            cmd = "upgrade",
+                            cmdId = "baseline:" + pkg.version,
+                            pkgVersion = pkg.version
+                        }));
+                        return;
+                    }
+                    long cur = Interlocked.Read(ref _menuVersion);
+                    if (cur != since) // 版本已不同（含服务端重启归零），立即返回变更
+                    {
+                        WriteJson(ctx.Response, JsonConvert.SerializeObject(new { changed = true, version = cur }));
+                        return;
+                    }
+
+                    var w = new Waiter { Cid = cid };
+                    lock (_wlock) _waiters.Add(w);
+                    bool signaled;
+                    try { signaled = await Task.WhenAny(w.Tcs.Task, Task.Delay(TimeSpan.FromSeconds(90))) == w.Tcs.Task; }
+                    catch { signaled = false; }
+                    finally { lock (_wlock) _waiters.Remove(w); }
+                    if (!signaled) break;   // 超时：跳出循环
+                    // 被唤醒（菜单变更或基线同步）：回到循环顶部重新检查基线与菜单版本
                 }
-                var tcs = new TaskCompletionSource<bool>();
-                lock (_wlock) { _waiters.Add(tcs); }
-                bool signaled = false;
-                try
-                {
-                    await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(90)));
-                    signaled = tcs.Task.IsCompleted;
-                }
-                catch { }
-                lock (_wlock) { _waiters.Remove(tcs); }
-                cur = Interlocked.Read(ref _menuVersion);
-                WriteJson(ctx.Response, JsonConvert.SerializeObject(new { changed = signaled || cur != since, version = cur }));
+                var v = Interlocked.Read(ref _menuVersion);
+                WriteJson(ctx.Response, JsonConvert.SerializeObject(new { changed = v != since, version = v }));
             }
             catch (Exception ex)
             {
@@ -321,9 +369,317 @@ namespace RepelService
         static void BumpMenu()
         {
             Interlocked.Increment(ref _menuVersion);
-            List<TaskCompletionSource<bool>> list;
+            List<Waiter> list;
             lock (_wlock) { list = [.. _waiters]; _waiters.Clear(); }
-            foreach (var t in list) try { t.TrySetResult(true); } catch { }
+            foreach (var t in list) try { t.Tcs.TrySetResult(1); } catch { }
+        }
+
+        /// <summary>只唤醒命中目标的挂起长轮询，让目标客户端立即拿到升级指令，不影响其他客户端的菜单刷新节奏。</summary>
+        static void SignalCommand(string target)
+        {
+            List<Waiter> list;
+            lock (_wlock) list = [.. _waiters];
+            foreach (var w in list)
+            {
+                if (target != "*" && !string.Equals(w.Cid, target, StringComparison.OrdinalIgnoreCase)) continue;
+                try { w.Tcs.TrySetResult(2); } catch { }
+            }
+        }
+
+        // ================= 客户端自更新：独立分发端点 + 独立管理面 =================
+
+        public class PkgFile { public string path = ""; public long size { get; set; } public string sha256 = ""; }
+        public class Package { public string version = ""; public List<PkgFile> files = new(); }
+
+        /// <summary>读取 RepelControl 导入的 impelpkg/version.json；每次请求重读，导入新版后无需重启服务。</summary>
+        static Package LoadPackage()
+        {
+            try
+            {
+                var f = Path.Combine(PkgDir, "version.json");
+                if (!File.Exists(f)) return null;
+                var p = JsonConvert.DeserializeObject<Package>(File.ReadAllText(f));
+                if (p == null || string.IsNullOrEmpty(p.version) || p.files == null || p.files.Count == 0) return null;
+                return p;
+            }
+            catch (Exception ex) { Log("读取客户端升级包失败：" + ex.Message); return null; }
+        }
+
+        static void ServeImpelVersion(HttpListenerContext ctx)
+        {
+            var p = LoadPackage();
+            if (p == null) { ctx.Response.StatusCode = 404; WriteJson(ctx.Response, "{\"err\":\"未导入客户端升级包\"}"); return; }
+            WriteJson(ctx.Response, JsonConvert.SerializeObject(p));
+        }
+
+        /// <summary>只放行 version.json 清单内登记的文件，防止通过 path 参数读取服务器任意文件。</summary>
+        static async Task ServeImpelFileAsync(HttpListenerContext ctx)
+        {
+            var rel = ctx.Request.QueryString["path"] ?? "";
+            var p = LoadPackage();
+            var hit = p?.files.Find(f => string.Equals(f.path, rel, StringComparison.OrdinalIgnoreCase));
+            if (hit == null) { ctx.Response.StatusCode = 404; return; }
+            string file;
+            try
+            {
+                var root = Path.GetFullPath(PkgDir).TrimEnd('\\', '/') + "\\";
+                file = Path.GetFullPath(Path.Combine(PkgDir, rel.Replace('/', '\\')));
+                if (!file.StartsWith(root, StringComparison.OrdinalIgnoreCase)) { ctx.Response.StatusCode = 400; return; }
+            }
+            catch { ctx.Response.StatusCode = 400; return; }
+            if (!File.Exists(file)) { ctx.Response.StatusCode = 404; return; }
+            try
+            {
+                ctx.Response.ContentType = "application/octet-stream";
+                ctx.Response.ContentLength64 = new FileInfo(file).Length;
+                ctx.Response.StatusCode = 200;
+                using (var fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    await fs.CopyToAsync(ctx.Response.OutputStream, 65536);
+            }
+            catch (Exception ex) { Log("客户端升级包下发失败 " + rel + "：" + Brief(ex)); }
+        }
+
+        /// <summary>管理端鉴权：adminToken 未配置时一律拒绝，避免「空密钥 = 全网可下发可执行文件」。</summary>
+        static bool CheckAdmin(HttpListenerContext ctx)
+        {
+            if (string.IsNullOrEmpty(AdminToken))
+            {
+                ctx.Response.StatusCode = 503;
+                WriteJson(ctx.Response, "{\"err\":\"repel.json 未配置 adminToken\"}");
+                return false;
+            }
+            var given = ctx.Request.Headers["X-Admin-Token"] ?? "";
+            // 定长比较，避免逐字节早退带来的时序侧信道
+            int diff = given.Length ^ AdminToken.Length;
+            for (int i = 0; i < given.Length && i < AdminToken.Length; i++) diff |= given[i] ^ AdminToken[i];
+            if (diff != 0)
+            {
+                ctx.Response.StatusCode = 401;
+                WriteJson(ctx.Response, "{\"err\":\"adminToken 无效\"}");
+                return false;
+            }
+            return true;
+        }
+
+        static void AdminClients(HttpListenerContext ctx)
+        {
+            if (!CheckAdmin(ctx)) return;
+            var now = DateTime.Now;
+            var list = new List<object>();
+            lock (_adminLock)
+                foreach (var kv in _clients)
+                    list.Add(new
+                    {
+                        cid = kv.Key,
+                        version = kv.Value.Version,
+                        host = kv.Value.Host,
+                        ip = kv.Value.Ip,
+                        lastSeenUtc = kv.Value.Last.ToUniversalTime().ToString("o"),
+                        online = (now - kv.Value.Last) < TimeSpan.FromMinutes(15)
+                    });
+            var pkg = LoadPackage();
+            WriteJson(ctx.Response, JsonConvert.SerializeObject(new { packageVersion = pkg?.version ?? "", clients = list }));
+        }
+
+        /// <summary>版本基线模式下，导入升级包即设定基线，客户端下一次长轮询会自动升级。
+        /// 此端点用于「立即唤醒」在线客户端重新检查基线版本，免去最长 90 秒的等待。
+        /// 可选 body.target 指定只唤醒某台客户端；缺省唤醒全部。</summary>
+        static void AdminUpgrade(HttpListenerContext ctx)
+        {
+            if (!CheckAdmin(ctx)) return;
+            if (!string.Equals(ctx.Request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase))
+            { ctx.Response.StatusCode = 405; return; }
+            var pkg = LoadPackage();
+            if (pkg == null)
+            { ctx.Response.StatusCode = 409; WriteJson(ctx.Response, "{\"err\":\"尚未导入客户端升级包\"}"); return; }
+            // 可选 target：仅唤醒指定客户端立即检查基线；缺省 "*" 唤醒全部在线客户端
+            string target = "*";
+            try
+            {
+                using (var r = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding))
+                {
+                    var body = r.ReadToEnd();
+                    if (!string.IsNullOrWhiteSpace(body))
+                    {
+                        var o = JObject.Parse(body);
+                        var t = (string)o["target"];
+                        if (!string.IsNullOrEmpty(t)) target = t.Trim();
+                    }
+                }
+            }
+            catch { }
+            // 唤醒目标长轮询：循环回到顶部重新比对版本基线，命中即自动下发升级
+            SignalCommand(target);
+            WriteJson(ctx.Response, JsonConvert.SerializeObject(new { ok = true, action = "wake", target, requiredVersion = pkg.version }));
+        }
+
+        // ===== 自动升级：从 Propel 拉取升级包（Impel 基线 + Repel 自身）=====
+        static readonly string SelfUpdateStage = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "RepelUpdate.staging");
+        static int _autoBusy = 0;
+
+        /// <summary>RepelService 自身版本（与 Impel 客户端取版本的方式一致：剥掉 ProductVersion 的 +sha 元数据）。</summary>
+        static string SelfVersion()
+        {
+            try
+            {
+                var v = FileVersionInfo.GetVersionInfo(System.Reflection.Assembly.GetExecutingAssembly().Location).ProductVersion;
+                if (!string.IsNullOrWhiteSpace(v)) { var s = v.Trim(); int plus = s.IndexOf('+'); return plus > 0 ? s.Substring(0, plus) : s; }
+            }
+            catch { }
+            try { return System.Reflection.Assembly.GetExecutingAssembly().GetName().Version.ToString(); } catch { return "0"; }
+        }
+
+        /// <summary>版本比较：a 比 b 新返回 &gt;0；解析失败时退化为字符串比较。</summary>
+        static int CompareVersion(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a) && string.IsNullOrEmpty(b)) return 0;
+            if (string.IsNullOrEmpty(a)) return -1;
+            if (string.IsNullOrEmpty(b)) return 1;
+            if (Version.TryParse(a, out var va) && Version.TryParse(b, out var vb)) return va.CompareTo(vb);
+            return string.CompareOrdinal(a, b);
+        }
+
+        /// <summary>从 Propel 下载单个升级文件并校验 sha256（与 all.lst 同样的 token 拼法）。</summary>
+        static async Task<bool> DownloadPropelFile(string kind, string rel, string dest, string expectHash)
+        {
+            var relEnc = string.Join("/", rel.Split('/').Select(s => Uri.EscapeDataString(s)));
+            var url = Source.TrimEnd('/') + "/" + kind + "/" + relEnc;
+            var tok = FirstToken();
+            if (!string.IsNullOrEmpty(tok)) url += "?token=" + Uri.EscapeDataString(tok);
+            try
+            {
+                var data = await WarmHttp.GetByteArrayAsync(url);   // 升级包可能较大，用 10 分钟超时
+                var dir = Path.GetDirectoryName(dest);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                File.WriteAllBytes(dest, data);
+                using var sha = SHA256.Create();
+                var actual = BitConverter.ToString(sha.ComputeHash(data)).Replace("-", "");
+                if (!actual.Equals(expectHash, StringComparison.OrdinalIgnoreCase)) { Log("升级文件校验失败：" + kind + "/" + rel); try { File.Delete(dest); } catch { } return false; }
+                return true;
+            }
+            catch (Exception ex) { Log("下载升级文件失败 " + kind + "/" + rel + "：" + ex.Message); return false; }
+        }
+
+        /// <summary>Impel 基线全自动：Propel 上的 impel/version.json 比本地 impelpkg 新时，自动拉取整包覆盖本地 impelpkg，
+        /// 后续 Impel 长轮询会自动比对基线版本并升级（无需管理员手动导入）。</summary>
+        static async Task CheckImpelPkg()
+        {
+            if (string.IsNullOrEmpty(Source)) return;
+            Package propPkg;
+            try
+            {
+                var url = Source.TrimEnd('/') + "/impel/version.json";
+                var tok = FirstToken();
+                if (!string.IsNullOrEmpty(tok)) url += "?token=" + Uri.EscapeDataString(tok);
+                var json = Encoding.UTF8.GetString(await WarmHttp.GetByteArrayAsync(url));
+                propPkg = JsonConvert.DeserializeObject<Package>(json);
+            }
+            catch (Exception ex) { Log("拉取 Propel impel 基线失败：" + ex.Message); return; }
+            if (propPkg == null || string.IsNullOrEmpty(propPkg.version) || propPkg.files == null || propPkg.files.Count == 0) return;
+
+            Package local = null;
+            try { local = LoadPackage(); } catch { }
+            if (local != null && CompareVersion(propPkg.version, local.version) <= 0) return;  // 本地已是最新或更新
+
+            Log("Propel 发布新 Impel 基线 " + propPkg.version + "（本地 " + (local?.version ?? "无") + "），自动拉取…");
+            foreach (var f in propPkg.files)
+            {
+                if (string.IsNullOrEmpty(f.path) || f.sha256.Length != 64) continue;
+                if (f.path.IndexOf("..", StringComparison.Ordinal) >= 0 || Path.IsPathRooted(f.path)) continue;
+                var dest = Path.Combine(PkgDir, f.path.Replace('/', '\\'));
+                if (!await DownloadPropelFile("impel", f.path, dest, f.sha256)) return;
+            }
+            // 整包下载完成后写 version.json（原子覆盖），避免中途被客户端读到半成品
+            File.WriteAllText(Path.Combine(PkgDir, "version.json"), JsonConvert.SerializeObject(propPkg, Formatting.Indented));
+            Log("Impel 基线已更新为 " + propPkg.version + "，在线客户端将自动升级");
+            SignalCommand("*");   // 唤醒所有挂起的长轮询，让 Impel 客户端立即重新检查基线并升级（无需最长 90s 等待）
+        }
+
+        /// <summary>Repel 自身自更新：Propel 上的 repel/version.json 比自身版本新时，拉取整包到 staging，
+        /// 启动 RepelUpdater 停服替换并重启（RepelService 随后退出以解锁自身 exe）。</summary>
+        static async Task CheckSelfUpdate()
+        {
+            if (string.IsNullOrEmpty(Source)) return;
+            Package propPkg;
+            try
+            {
+                var url = Source.TrimEnd('/') + "/repel/version.json";
+                var tok = FirstToken();
+                if (!string.IsNullOrEmpty(tok)) url += "?token=" + Uri.EscapeDataString(tok);
+                var json = Encoding.UTF8.GetString(await WarmHttp.GetByteArrayAsync(url));
+                propPkg = JsonConvert.DeserializeObject<Package>(json);
+            }
+            catch (Exception ex) { Log("拉取 Propel repel 基线失败：" + ex.Message); return; }
+            if (propPkg == null || string.IsNullOrEmpty(propPkg.version) || propPkg.files == null || propPkg.files.Count == 0) return;
+            if (CompareVersion(propPkg.version, SelfVersion()) <= 0) return;  // 自身已是最新
+
+            Log("Propel 发布新 Repel 版本 " + propPkg.version + "（当前 " + SelfVersion() + "），准备自更新…");
+            if (Directory.Exists(SelfUpdateStage)) { try { Directory.Delete(SelfUpdateStage, true); } catch { } }
+            Directory.CreateDirectory(SelfUpdateStage);
+            var lines = new List<string>();
+            foreach (var f in propPkg.files)
+            {
+                if (string.IsNullOrEmpty(f.path) || f.sha256.Length != 64) continue;
+                if (f.path.IndexOf("..", StringComparison.Ordinal) >= 0 || Path.IsPathRooted(f.path)) continue;
+                if (f.path.Equals("repel.json", StringComparison.OrdinalIgnoreCase)) continue;  // 绝不覆盖用户配置
+                var dest = Path.Combine(SelfUpdateStage, f.path.Replace('/', '\\'));
+                if (!await DownloadPropelFile("repel", f.path, dest, f.sha256)) return;
+                lines.Add(f.path + "\t" + f.sha256);
+            }
+            File.WriteAllLines(Path.Combine(SelfUpdateStage, "files.lst"), lines, Encoding.UTF8);
+            var updater = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "RepelUpdater.exe");
+            if (!File.Exists(updater)) { Log("自更新中止：缺少 RepelUpdater.exe（需随服务端安装包部署）"); return; }
+            try
+            {
+                Process.Start(new ProcessStartInfo(updater)
+                {
+                    Arguments = "--dir \"" + AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\', '/') + "\" --stage \"" + SelfUpdateStage + "\" --service Repel",
+                    WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                });
+                Log("已启动 RepelUpdater，即将退出以完成自更新");
+                Environment.Exit(0);
+            }
+            catch (Exception ex) { Log("启动 RepelUpdater 失败：" + ex.Message); try { Directory.Delete(SelfUpdateStage, true); } catch { } }
+        }
+
+        /// <summary>自动升级后台循环：每 60 秒检查一次 Propel 上的 Impel 基线与 Repel 自身版本。</summary>
+        static async Task AutoUpdateLoop()
+        {
+            while (!_stopping)
+            {
+                await Task.Delay(60 * 1000);
+                if (_stopping) break;
+                if (Interlocked.Exchange(ref _autoBusy, 1) == 1) continue;
+                try { await CheckImpelPkg(); await CheckSelfUpdate(); }
+                catch (Exception ex) { Log("自动升级检查异常：" + ex.Message); }
+                finally { Interlocked.Exchange(ref _autoBusy, 0); }
+            }
+        }
+
+        static void RecordClient(string cid, string version, string ip)
+        {
+            if (string.IsNullOrEmpty(cid)) return;
+            lock (_adminLock)
+            {
+                if (!_clients.TryGetValue(cid, out var r)) { r = new ClientRec(); _clients[cid] = r; }
+                if (!string.IsNullOrEmpty(version)) r.Version = version;
+                if (!string.IsNullOrEmpty(ip)) r.Ip = ip;
+                r.Last = DateTime.Now;
+            }
+        }
+
+        /// <summary>在线心跳 / P2P 注册上报 clientId 时，把计算机名关联到该客户端记录。</summary>
+        static void BindClientHost(string cid, string host)
+        {
+            if (string.IsNullOrEmpty(cid) || string.IsNullOrEmpty(host)) return;
+            lock (_adminLock)
+            {
+                if (!_clients.TryGetValue(cid, out var r)) { r = new ClientRec(); _clients[cid] = r; }
+                r.Host = host;
+                r.Last = DateTime.Now;
+            }
         }
 
         static void Register(HttpListenerContext ctx)
@@ -335,6 +691,7 @@ namespace RepelService
                 if (rb == null || string.IsNullOrEmpty(rb.appId)) { ctx.Response.StatusCode = 400; return; }
                 if (string.IsNullOrEmpty(rb.providerUrl)) { ctx.Response.StatusCode = 400; return; }   // providerUrl 缺失会导致 Query 拼出空 baseUrl
                 if (!string.IsNullOrEmpty(rb.host)) lock (_onlineLock) _hosts[rb.providerUrl] = rb.host;   // 记录计算机名，供 Diag 显示
+                BindClientHost(rb.clientId, rb.host);   // 把计算机名关联到稳定 clientId，供管理端定向升级
                 lock (RegLock)
                 {
                     if (!Registry.ContainsKey(rb.appId)) Registry[rb.appId] = new Dictionary<string, List<PeerEntry>>(StringComparer.OrdinalIgnoreCase);
@@ -364,6 +721,7 @@ namespace RepelService
                 var rb = JsonConvert.DeserializeObject<RegisterBody>(r.ReadToEnd());
                 if (rb == null || string.IsNullOrEmpty(rb.providerUrl)) { ctx.Response.StatusCode = 400; return; }
                 lock (_onlineLock) { _online[rb.providerUrl] = DateTime.Now; if (!string.IsNullOrEmpty(rb.host)) _hosts[rb.providerUrl] = rb.host; }
+                BindClientHost(rb.clientId, rb.host);
                 ctx.Response.StatusCode = 200;
                 Interlocked.Increment(ref _registerTotal);   // 复用统计：在线上报也计入 registerTotal
             }
@@ -534,12 +892,27 @@ namespace RepelService
             }
             var hostMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             lock (_onlineLock) foreach (var kv in _hosts) hostMap[kv.Key] = kv.Value;
+            // 客户端版本清单：按 IP 关联到聚合后的 peers（局域网直连场景 IP 一致），供 repelView 显示客户端版本号
+            var verByIp = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            lock (_adminLock)
+                foreach (var kv in _clients)
+                    if (!string.IsNullOrEmpty(kv.Value.Ip) && !verByIp.ContainsKey(kv.Value.Ip))
+                        verByIp[kv.Value.Ip] = kv.Value.Version;
+            string HostPart(string u)
+            {
+                if (string.IsNullOrEmpty(u)) return "";
+                var i = u.IndexOf("://"); if (i >= 0) u = u.Substring(i + 3);
+                var s = u.IndexOf('/'); if (s >= 0) u = u.Substring(0, s);
+                var c = u.IndexOf(':'); if (c >= 0) u = u.Substring(0, c);
+                return u;
+            }
             var peers = info.Values.Select(pi => new
             {
                 providerUrl = pi.Url,
                 host = hostMap.TryGetValue(pi.Url, out var hn) ? hn : "",
                 apps = pi.Apps.Count,
                 hashes = pi.HashCount,
+                version = verByIp.TryGetValue(HostPart(pi.Url), out var ver) ? ver : "",
                 lastSeenUtc = (pi.MinExpire == DateTime.MaxValue ? null : pi.MinExpire.AddMinutes(-20).ToUniversalTime().ToString("o")),
                 expireUtc = (pi.MaxExpire == DateTime.MinValue ? null : pi.MaxExpire.ToUniversalTime().ToString("o")),
                 online = pi.MaxExpire > now
@@ -547,6 +920,18 @@ namespace RepelService
 
             string[] recentArr;
             lock (_recentLock) { recentArr = [.. _recent]; }
+
+            // 客户端版本清单：供监控端观察哪些机器尚未升级（管理端定向升级用 /admin/impel/clients 的同一份数据）
+            var clientList = new List<object>();
+            lock (_adminLock)
+                foreach (var kv in _clients)
+                    clientList.Add(new
+                    {
+                        cid = kv.Key,
+                        version = kv.Value.Version,
+                        host = kv.Value.Host,
+                        online = (now - kv.Value.Last) < TimeSpan.FromMinutes(15)
+                    });
 
             var (apps, hashes) = CacheStats();
 
@@ -591,6 +976,7 @@ namespace RepelService
                     lastError = _propelErr
                 },
                 peers,
+                clients = clientList,
                 stats = new
                 {
                     registerTotal = Interlocked.Read(ref _registerTotal),

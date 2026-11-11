@@ -90,7 +90,8 @@ namespace Impel
                 version = m.version,
                 hashes = hashes,
                 providerUrl = "http://" + (string.IsNullOrEmpty(cfg.p2p.advertiseIp) ? LocalLanIP(RepelHost(cfg)) : cfg.p2p.advertiseIp.Trim()) + ":" + cfg.p2p.port,
-                host = Environment.MachineName   // 客户端本地计算机名，repelView 显示用
+                host = Environment.MachineName,   // 客户端本地计算机名，repelView 显示用
+                clientId = cfg.clientId ?? ""     // 稳定标识：Repel 据此把 clientId 与计算机名关联
             };
             PostRegister(cfg, body);
         }
@@ -144,7 +145,7 @@ namespace Impel
                 req.Method = "POST";
                 req.ContentType = "application/json";
                 req.Timeout = 8000;
-                var body = new { providerUrl = providerUrl, host = host };
+                var body = new { providerUrl = providerUrl, host = host, clientId = cfg.clientId ?? "" };
                 var bytes = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(body));
                 req.ContentLength = bytes.Length;
                 using (var s = req.GetRequestStream()) s.Write(bytes, 0, bytes.Length);

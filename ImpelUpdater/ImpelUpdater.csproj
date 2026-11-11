@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 无控制台窗口：升级过程只写 selfupdate.log，避免用户看到黑框闪现 -->
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>ImpelUpdater</AssemblyName>
+    <RootNamespace>ImpelUpdater</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <OutputPath>..\dist\impel\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <!-- 与 impel.exe 同目录部署，安装包会自动带上；不生成多余的 exe.config -->
+  <Target Name="TrimOutput" AfterTargets="Build">
+    <ItemGroup>
+      <_UpPdbFiles Include="$(OutDir)ImpelUpdater.pdb" />
+    </ItemGroup>
+    <Delete Files="@(_UpPdbFiles)" />
+    <Delete Files="$(OutDir)ImpelUpdater.exe.config" Condition="Exists('$(OutDir)ImpelUpdater.exe.config')" />
+  </Target>
+
+</Project>

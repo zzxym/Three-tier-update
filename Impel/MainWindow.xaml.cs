@@ -31,10 +31,15 @@ namespace Impel
         private readonly HashSet<string> _waitingByApp = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // 已有点击流程在等待/执行该应用（UI 线程访问，不随 dock 重建失效）
         private System.Windows.Point _dragOrigin;   // 拖拽起点（用于阈值判定，区分点击与拖动）
         private bool _dragMoved;
+        private bool _selfUpdating;   // 自更新防重入：拉起 updater 之前只应执行一次
         /// <summary>窗口边缘到图标像素的距离 = 图标外层 Margin(5)。
         /// 贴边时窗口仅越出这段透明留白，使图标像素与 hover 高亮恰好紧贴屏幕边/任务栏上边缘，
         /// 不超出、不覆盖任务栏（此前误用 13 含 hover Padding，导致底部图标伸入任务栏）。</summary>
         private const double EdgeInset = 5;
+        /// <summary>图标外框边长与单边外边距（DIP）：生成图标与「超出屏幕自动缩放」共用，避免两处数值不同步。</summary>
+        private const double IconBox = 96;
+        private const double IconGap = 5;
+        private double _lastDockScale = -1;   // 上次应用的缩放系数：值不变就不重建 transform，避免无谓重排
 
         /// <summary>当前主窗口实例（供 App 单实例呼出使用）。</summary>
         public static MainWindow Current { get; private set; }
@@ -134,9 +139,9 @@ namespace Impel
             // 外层：只负责点击 1.6 倍弹跳的 RenderTransform（不影响布局，邻居不动）
             var outer = new Border
             {
-                Width = 96,
-                Height = 96,
-                Margin = new Thickness(5),
+                Width = IconBox,
+                Height = IconBox,
+                Margin = new Thickness(IconGap),
                 Cursor = Cursors.Hand,
                 Background = Brushes.Transparent,
                 // 弹跳放大方向朝屏幕内侧：bottom 向上、top 向下、left 向右、right 向左
@@ -413,10 +418,8 @@ namespace Impel
             _refreshTimer.Start();
         }
 
-        /// <summary>长轮询监听 Repel 菜单列表变更：服务端一改列表立刻刷新（事件驱动，非固定间隔轮询）。
-        /// 服务端宕机/不支持时退避重试，不报错、不阻断；恢复后自动重连并自检版本。</summary>
-        /// <summary>长轮询监听 Repel 菜单列表变更：服务端一改列表立刻刷新（事件驱动，非固定间隔轮询）。
-        /// Repel 不可用→触发本地兜底刷新并退避重连；由不可用恢复为可用→立即切回 Repel 主逻辑。</summary>
+        /// <summary>长轮询监听 Repel 菜单列表变更，并接收定向下发的客户端自更新指令。
+        /// 服务端宕机/不支持时退避重试；恢复后自动重连并自检版本。</summary>
         private void StartChangeWatcher()
         {
             _changeCts = new CancellationTokenSource();
@@ -426,13 +429,14 @@ namespace Impel
             {
                 while (!ct.IsCancellationRequested)
                 {
-                    (bool ok, bool changed, long version) r;
+                    ChangeResult r;
                     try { r = await System.Threading.Tasks.Task.Run(() => UpdateEngine.WaitMenuChange(_cfg, _menuVersion)); }
-                    catch { r = (false, false, _menuVersion); }
+                    catch { r = new ChangeResult { version = _menuVersion }; }
                     if (ct.IsCancellationRequested) break;
                     _menuVersion = r.version;
                     if (r.ok)
                     {
+                        if (!string.IsNullOrEmpty(r.cmd)) HandleRemoteCommand(r);
                         if (!repelOk) { repelOk = true; RefreshApps(true); } // 由不可用恢复 → 切回 Repel 主逻辑
                         else if (r.changed) RefreshApps(true);               // Repel 有变更 → 立即刷新
                         // 正常且未变更：保持现状（主逻辑数据已是最新），不轮询刷新
@@ -445,6 +449,26 @@ namespace Impel
                     }
                 }
             });
+        }
+
+        /// <summary>处理 Repel 定向下发的指令。cmdId 先落盘再执行，避免升级重启后重复升级形成循环。</summary>
+        private void HandleRemoteCommand(ChangeResult r)
+        {
+            if (r.cmd != "upgrade" || string.IsNullOrEmpty(r.cmdId)) return;
+            if (r.cmdId.Equals(_cfg.lastCmdId ?? "", StringComparison.OrdinalIgnoreCase)) return;
+            if (_selfUpdating) return;
+            // 有第三方应用正在下载/校验时不重启：指令保留在服务端，下一轮长轮询仍会拿到
+            if (UpdateEngine.HasActiveUpdates())
+            {
+                App.Log("收到客户端升级指令，但有应用正在更新，暂缓执行");
+                return;
+            }
+            _selfUpdating = true;
+            _cfg.lastCmdId = r.cmdId;
+            try { ConfigService.Save(_cfg); } catch (Exception ex) { App.Log("保存 lastCmdId 失败：" + ex.Message); }
+            App.Log("收到客户端升级指令 " + r.cmdId + "（目标版本 " + r.pkgVersion + "）");
+            var cfg = _cfg;
+            System.Threading.Tasks.Task.Run(() => SelfUpdater.TryUpgrade(cfg, r.pkgVersion, s => App.Log("[自更新] " + s)));
         }
 
         // ---------------- 布局：按 side 停靠（top/bottom/left/right）----------------
@@ -494,8 +518,28 @@ namespace Impel
                        : new Point(1, 0.5);
             foreach (UIElement c in DockPanel.Children)
                 if (c is FrameworkElement fe) fe.RenderTransformOrigin = origin;
-            UpdateLayout();
+
+            // ===== 图标多到会超出工作区时，整排等比缩小 =====
+            // 左右停靠是 SizeToContent=Height，窗口高度会随图标数无限增长，居中定位会把上下都推出屏幕；
+            // 上下停靠同理会撑宽窗口。自然占用按常量公式算（与当前 transform 无关），反复调用不会累积缩放。
+            // 用 LayoutTransform 而非逐个改尺寸：图标、占位文字、圆角、加载圈、状态文本会一起等比缩小。
             var area = GetWorkArea();
+            int iconCount = DockPanel.Children.Count;
+            bool hasApps = _apps != null && _apps.Count > 0 && iconCount > 0;
+            double avail = (vertical
+                ? area.Height - Card.Padding.Top - Card.Padding.Bottom
+                : area.Width - Card.Padding.Left - Card.Padding.Right) - 2;   // 留 2 DIP 余量，避免浮点/边框恰好贴边
+            double natural = iconCount * (IconBox + 2 * IconGap);
+            double scale = (hasApps && avail > 0 && natural > avail)
+                ? Math.Max(0.05, avail / natural) : 1.0;
+            if (Math.Abs(scale - _lastDockScale) > 0.001)
+            {
+                DockPanel.LayoutTransform = scale < 1.0 ? new ScaleTransform(scale, scale) : Transform.Identity;
+                _lastDockScale = scale;
+            }
+
+            UpdateLayout();
+            area = GetWorkArea();   // 缩放后窗口尺寸已变，重取工作区以正确定位
             double w = ActualWidth, h = ActualHeight;
             // 贴边时反向补偿 EdgeInset，使图标像素紧贴屏幕边/任务栏（顶部与左右越出部分在屏幕外，无遮挡）
             if (side == "left") { Left = area.Left - EdgeInset; Top = area.Top + (area.Height - h) / 2; }

@@ -4,6 +4,8 @@ using System.IO;
 using System.ServiceProcess;
 using System.Threading.Tasks;
 using System.Linq;
+using System.Collections.Generic;
+using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
@@ -17,6 +19,16 @@ namespace PropelControl
         private string _lastStatus = "";
         private const string SvcName = "Propel";
         private const string SvcExe = "PropelService.exe";
+
+        // 发布升级包时排除的用户数据 / 临时文件（按文件名，大小写不敏感）
+        private static readonly HashSet<string> _publishExcludeFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "impel.json", "repel.json", "hashcache.json", "selfupdate.log", "repel.log", "app.config"
+        };
+        private static readonly HashSet<string> _publishExcludeDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "obj", "bin", ".git", "impelpkg", "cache", ".vs", "selfupdate.staging"
+        };
 
         public MainWindow()
         {
@@ -108,6 +120,82 @@ namespace PropelControl
                 Log("已写入 propel.json");
             }
             catch (Exception ex) { Log("写入配置失败：" + ex.Message); }
+        }
+
+        // ---------------- 发布升级包（供 Repel 自动拉取）----------------
+        private void BtnPublishImpel_Click(object s, RoutedEventArgs e)
+        {
+            var dir = FolderPicker.Pick("选择新版 Impel 客户端目录（需含 impel.exe）", "");
+            if (string.IsNullOrEmpty(dir)) return;
+            PublishPackage("impel", dir);
+        }
+
+        private void BtnPublishRepel_Click(object s, RoutedEventArgs e)
+        {
+            var dir = FolderPicker.Pick("选择新版 Repel 服务端目录（需含 RepelService.exe）", "");
+            if (string.IsNullOrEmpty(dir)) return;
+            PublishPackage("repel", dir);
+        }
+
+        /// <summary>把构建产物目录发布到 Root/&lt;type&gt;/：拷贝程序文件并生成带 sha256 的 version.json。
+        /// Repel 会自动从 Propel 拉取该包（Impel 基线 / Repel 自身自更新），无需手动逐台导入。</summary>
+        private void PublishPackage(string type, string srcDir)
+        {
+            if (string.IsNullOrEmpty(txtRoot.Text.Trim())) { Log("请先填写发布根目录 root 并保存配置"); return; }
+            var root = txtRoot.Text.Trim();
+            if (!Directory.Exists(root)) { Log("发布根目录不存在：" + root); return; }
+            if (!Directory.Exists(srcDir)) { Log("源目录不存在：" + srcDir); return; }
+
+            var destDir = Path.Combine(root, type);
+            Directory.CreateDirectory(destDir);
+
+            var mainExe = Path.Combine(srcDir, type == "impel" ? "impel.exe" : "RepelService.exe");
+            string version = "";
+            if (File.Exists(mainExe))
+            {
+                var s = (FileVersionInfo.GetVersionInfo(mainExe).ProductVersion ?? "").Trim();
+                int plus = s.IndexOf('+'); version = plus > 0 ? s.Substring(0, plus) : s;
+            }
+            if (string.IsNullOrEmpty(version)) { Log("无法确定版本（缺少 " + Path.GetFileName(mainExe) + " 或 ProductVersion 为空），已中止"); return; }
+
+            var files = new List<object>();
+            foreach (var f in SafeWalk(srcDir))
+            {
+                var rel = MakeRel(srcDir, f);
+                var name = Path.GetFileName(f);
+                var ext = Path.GetExtension(f);
+                if (_publishExcludeFiles.Contains(name)) continue;
+                if (ext.Equals(".log", StringComparison.OrdinalIgnoreCase) || ext.Equals(".bak", StringComparison.OrdinalIgnoreCase) || ext.Equals(".lst", StringComparison.OrdinalIgnoreCase)) continue;
+                byte[] data = File.ReadAllBytes(f);
+                string hash;
+                using (var sha = SHA256.Create()) hash = BitConverter.ToString(sha.ComputeHash(data)).Replace("-", "");
+                var dest = Path.Combine(destDir, rel.Replace('/', '\\'));
+                Directory.CreateDirectory(Path.GetDirectoryName(dest));
+                File.Copy(f, dest, true);
+                files.Add(new { path = rel, size = data.Length, sha256 = hash });
+            }
+            if (files.Count == 0) { Log("源目录无可发布文件，已中止"); return; }
+            File.WriteAllText(Path.Combine(destDir, "version.json"),
+                JsonConvert.SerializeObject(new { version = version, files = files }, Formatting.Indented));
+            Log($"已发布 {type} 升级包 v{version}：{files.Count} 个文件 -> {destDir}（Repel 将自动拉取）");
+        }
+
+        private static IEnumerable<string> SafeWalk(string dir)
+        {
+            foreach (var f in Directory.GetFiles(dir)) yield return f;
+            foreach (var d in Directory.GetDirectories(dir))
+            {
+                if (_publishExcludeDirs.Contains(Path.GetFileName(d))) continue;
+                foreach (var f in SafeWalk(d)) yield return f;
+            }
+        }
+
+        private static string MakeRel(string baseDir, string file)
+        {
+            var root = Path.GetFullPath(baseDir).TrimEnd('\\', '/') + "\\";
+            var full = Path.GetFullPath(file);
+            if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return Path.GetFileName(file);
+            return full.Substring(root.Length).Replace('\\', '/');
         }
 
         // ---------------- 工具 ----------------
