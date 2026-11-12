@@ -112,12 +112,46 @@ namespace Impel
         /// <summary>迁移切换退出码：ImpelUpdater 据此区分“迁移后正常切换”与“启动崩溃”（后者触发回滚）。</summary>
         internal const int MigratedExitCode = 3010;
 
+        /// <summary>若本进程由 ImpelUpdater 拉起（升级流程），等它完成提交/清理并退出后再迁移：
+        /// 避免在它的 8 秒崩溃监控期内退出而被误判回滚（存量 ImpelUpdater 不识别迁移退出码 3010）。返回其是否已退出。</summary>
+        private static bool WaitForUpdaterExit()
+        {
+            try
+            {
+                var self = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ImpelUpdater.exe");
+                for (int i = 0; i < 120; i++)
+                {
+                    bool running = false;
+                    foreach (var p in Process.GetProcessesByName("ImpelUpdater"))
+                    {
+                        try
+                        {
+                            // 取不到模块路径（权限/退出时机）时按存在处理，保守等待
+                            var path = p.MainModule == null ? null : p.MainModule.FileName;
+                            if (string.IsNullOrEmpty(path) || string.Equals(Path.GetFullPath(path), Path.GetFullPath(self), StringComparison.OrdinalIgnoreCase))
+                                running = true;
+                        }
+                        catch { running = true; }
+                        try { p.Dispose(); } catch { }
+                    }
+                    if (!running) return true;
+                    Thread.Sleep(500);
+                }
+                Log("等待 ImpelUpdater 退出超时（60s），继续执行迁移");
+                return false;
+            }
+            catch (Exception ex) { Log("等待 ImpelUpdater 异常：" + ex.Message); return false; }
+        }
+
         /// <summary>迁移到 &lt;softwareRoot&gt;\impel：优先从服务端拉取发布的 impel 包，否则复制自身；随后迁移配置/依赖并切换到目标运行。</summary>
         private static void BootstrapMigration(ImpelConfig cfg)
         {
             var root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
             var sub = TargetImpelDir();
             try { Directory.CreateDirectory(sub); } catch { }
+
+            // 先等拉起本进程的 ImpelUpdater 完成提交/清理并退出（若有），再开始迁移
+            bool updaterGone = WaitForUpdaterExit();
 
             bool fetched = false;
             try { fetched = SelfUpdater.TryFetchTo(cfg, sub, Log); } catch (Exception ex) { Log("拉取发布版失败：" + ex.Message); }
@@ -130,7 +164,7 @@ namespace Impel
             }
 
             // 迁移当前目录的配置/缓存/依赖到目标（程序文件若目标已有则丢弃源，避免覆盖发布版）
-            MoveConfigTo(root, sub);
+            MoveConfigTo(root, sub, updaterGone);
             UpdateShortcuts(Path.Combine(sub, "impel.exe"), sub);
 
             try { _single?.ReleaseMutex(); } catch { }
@@ -151,12 +185,17 @@ namespace Impel
         }
 
         /// <summary>将当前目录的用户数据与依赖整体迁入目标目录；程序文件（impel.exe/Newtonsoft/Updater）若目标已存在则删除源，避免覆盖发布版。</summary>
-        private static void MoveConfigTo(string root, string target)
+        private static void MoveConfigTo(string root, string target, bool deleteStaging)
         {
             foreach (var entry in Directory.GetFileSystemEntries(root))
             {
                 var name = Path.GetFileName(entry);
-                if (name.Equals("SelfUpdate.staging", StringComparison.OrdinalIgnoreCase)) continue;   // 升级临时目录
+                if (name.Equals("SelfUpdate.staging", StringComparison.OrdinalIgnoreCase))
+                {
+                    // 升级临时目录：ImpelUpdater 成功路径已删；失败残留或等待超时时，确认其已退出再清理
+                    if (deleteStaging) { try { Directory.Delete(entry, true); } catch { } }
+                    continue;
+                }
                 if (Directory.Exists(entry) && string.Equals(Path.GetFullPath(entry), target, StringComparison.OrdinalIgnoreCase)) continue; // 目标自身
                 if (Directory.Exists(entry) && name.Equals("impel", StringComparison.OrdinalIgnoreCase)
                     && !string.Equals(Path.GetFullPath(entry), target, StringComparison.OrdinalIgnoreCase))
