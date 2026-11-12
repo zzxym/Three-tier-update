@@ -76,6 +76,16 @@ namespace Impel
                 (s, t) => Dispatcher.Invoke(() => Impel.MainWindow.Current?.ShowDock()),
                 null, Timeout.Infinite, false);
 
+            // 迁移切换后的目标实例：延迟清理旧目录（旧进程退出、文件锁释放后）
+            for (int i = 0; i < e.Args.Length - 1; i++)
+            {
+                if (string.Equals(e.Args[i], "--cleanup", StringComparison.OrdinalIgnoreCase))
+                {
+                    var dir = e.Args[i + 1].Trim('"');
+                    ThreadPool.QueueUserWorkItem(_ => CleanupOldDir(dir));
+                }
+            }
+
             try
             {
                 var w = new MainWindow();
@@ -143,6 +153,32 @@ namespace Impel
             catch (Exception ex) { Log("等待 ImpelUpdater 异常：" + ex.Message); return false; }
         }
 
+        /// <summary>迁移切换后由目标实例延迟清理旧目录：此时旧进程已退出，impel.exe/Newtonsoft 等文件锁已释放。
+        /// 清空目录内容后仅当目录为空时删除目录本身；个别文件仍删不掉则保留（可手动删）。</summary>
+        private static void CleanupOldDir(string dir)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(dir)) return;
+                var full = Path.GetFullPath(dir).TrimEnd('\\');
+                var cur = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
+                if (string.Equals(full, cur, StringComparison.OrdinalIgnoreCase)) return; // 防误删自身目录
+                Thread.Sleep(3000); // 等旧进程完全退出、文件锁释放
+                foreach (var entry in Directory.GetFileSystemEntries(full))
+                {
+                    try
+                    {
+                        if (Directory.Exists(entry)) Directory.Delete(entry, true);
+                        else File.Delete(entry);
+                    }
+                    catch { }
+                }
+                try { Directory.Delete(full, false); } catch { } // 仅空目录可删
+                Log("旧目录已清理：" + full);
+            }
+            catch { }
+        }
+
         /// <summary>迁移到 &lt;softwareRoot&gt;\impel：优先从服务端拉取发布的 impel 包，否则复制自身；随后迁移配置/依赖并切换到目标运行。</summary>
         private static void BootstrapMigration(ImpelConfig cfg)
         {
@@ -173,6 +209,8 @@ namespace Impel
             {
                 Process.Start(new ProcessStartInfo(Path.Combine(sub, "impel.exe"))
                 {
+                    // 目标实例启动后延迟清理旧目录（运行中的 exe/dll 此刻仍被本进程锁定，无法删除）
+                    Arguments = "--cleanup \"" + root + "\"",
                     WorkingDirectory = sub,
                     UseShellExecute = false,
                     CreateNoWindow = true
