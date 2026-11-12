@@ -10,8 +10,8 @@
     <Company>漳州市天一网络</Company>
     <Copyright>Copyright © 漳州市天一网络</Copyright>
     <FileVersion>4.1.0</FileVersion>
-    <InformationalVersion>26.2.2</InformationalVersion>
-    <Version>26.2.2</Version>
+    <InformationalVersion>26.2.3</InformationalVersion>
+    <Version>26.2.3</Version>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
