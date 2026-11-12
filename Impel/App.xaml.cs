@@ -109,6 +109,9 @@ namespace Impel
             return string.Equals(Path.GetFullPath(self), Path.GetFullPath(targetExe), StringComparison.OrdinalIgnoreCase);
         }
 
+        /// <summary>迁移切换退出码：ImpelUpdater 据此区分“迁移后正常切换”与“启动崩溃”（后者触发回滚）。</summary>
+        internal const int MigratedExitCode = 3010;
+
         /// <summary>迁移到 &lt;softwareRoot&gt;\impel：优先从服务端拉取发布的 impel 包，否则复制自身；随后迁移配置/依赖并切换到目标运行。</summary>
         private static void BootstrapMigration(ImpelConfig cfg)
         {
@@ -143,6 +146,8 @@ namespace Impel
             }
             catch (Exception ex) { Log("启动目标实例失败：" + ex.Message); }
             Application.Current?.Shutdown();
+            // 以约定退出码告知 ImpelUpdater：本进程并非启动崩溃，而是完成迁移后已切换到 <softwareRoot>\impel 运行
+            Environment.ExitCode = MigratedExitCode;
         }
 
         /// <summary>将当前目录的用户数据与依赖整体迁入目标目录；程序文件（impel.exe/Newtonsoft/Updater）若目标已存在则删除源，避免覆盖发布版。</summary>

@@ -15,6 +15,8 @@ namespace ImpelUpdater
     internal static class Program
     {
         private const string SingleMutex = "Local\\Impel_Single";
+        // 与 Impel.App.MigratedExitCode 约定一致：新版启动后完成“迁移到 <softwareRoot>\impel”并切换运行时的退出码
+        private const int MigratedExitCode = 3010;
 
         private class Entry { public string Rel; public string Hash; }
 
@@ -46,7 +48,18 @@ namespace ImpelUpdater
 
                 // 给 WPF 进程足够的启动时间：若它立刻崩溃（缺 DLL / 版本不匹配），立即回滚到旧版
                 Thread.Sleep(8000);
-                if (proc.HasExited) throw new Exception("新版 impel.exe 启动后退出（退出码 " + proc.ExitCode + "）");
+                if (proc.HasExited)
+                {
+                    if (proc.ExitCode == MigratedExitCode)
+                    {
+                        // 新版启动后完成“迁移到 <softwareRoot>\impel”并切换运行（约定退出码 3010），不是崩溃，不回滚
+                        Log("新版 impel.exe 已迁移至软件根 impel 目录并切换运行");
+                        Commit();
+                        Log("升级成功（含迁移），新版 impel.exe 已在新目录运行");
+                        return 0;
+                    }
+                    throw new Exception("新版 impel.exe 启动后退出（退出码 " + proc.ExitCode + "）");
+                }
 
                 Commit();
                 Log("升级成功，新版 impel.exe 已运行");

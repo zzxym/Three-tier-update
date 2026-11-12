@@ -118,6 +118,8 @@ namespace Impel
                 var files = obj["files"] as JArray;
                 if (string.IsNullOrEmpty(version) || files == null || files.Count == 0)
                 { log("未找到客户端发布包（Repel 未导入 impel 升级包）"); return false; }
+                if (version.Equals(ClientInfo.Version, StringComparison.OrdinalIgnoreCase))
+                { log("服务端发布版本 " + version + " 与当前一致，直接使用当前本体（免重复下载）"); return false; }
                 foreach (JToken f in files)
                 {
                     var rel = (string)f["path"] ?? "";
