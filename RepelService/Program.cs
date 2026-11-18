@@ -892,12 +892,19 @@ namespace RepelService
             }
             var hostMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             lock (_onlineLock) foreach (var kv in _hosts) hostMap[kv.Key] = kv.Value;
-            // 客户端版本清单：按 IP 关联到聚合后的 peers（局域网直连场景 IP 一致），供 repelView 显示客户端版本号
+            // 客户端版本清单：按主机名关联到聚合后的 peers。
+            // 旧实现按 IP 关联：版本取自 /changes 的 TCP 源 IP，而 peer 的 IP 取自 providerUrl（多网卡/NAT/手填 advertiseIp 时不一致），
+            // 匹配失败导致版本列显示 "-"。主机名由 /peer/register 绑定（与展示的 host 同源），改用它关联更可靠。
+            // 没有主机名时（未注册）再回退 IP 关联，保持兼容。
+            var verByHost = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var verByIp = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             lock (_adminLock)
                 foreach (var kv in _clients)
-                    if (!string.IsNullOrEmpty(kv.Value.Ip) && !verByIp.ContainsKey(kv.Value.Ip))
-                        verByIp[kv.Value.Ip] = kv.Value.Version;
+                {
+                    var c = kv.Value;
+                    if (!string.IsNullOrEmpty(c.Host) && !verByHost.ContainsKey(c.Host)) verByHost[c.Host] = c.Version;
+                    if (!string.IsNullOrEmpty(c.Ip) && !verByIp.ContainsKey(c.Ip)) verByIp[c.Ip] = c.Version;
+                }
             string HostPart(string u)
             {
                 if (string.IsNullOrEmpty(u)) return "";
@@ -906,16 +913,22 @@ namespace RepelService
                 var c = u.IndexOf(':'); if (c >= 0) u = u.Substring(0, c);
                 return u;
             }
-            var peers = info.Values.Select(pi => new
+            var peers = info.Values.Select(pi =>
             {
-                providerUrl = pi.Url,
-                host = hostMap.TryGetValue(pi.Url, out var hn) ? hn : "",
-                apps = pi.Apps.Count,
-                hashes = pi.HashCount,
-                version = verByIp.TryGetValue(HostPart(pi.Url), out var ver) ? ver : "",
-                lastSeenUtc = (pi.MinExpire == DateTime.MaxValue ? null : pi.MinExpire.AddMinutes(-20).ToUniversalTime().ToString("o")),
-                expireUtc = (pi.MaxExpire == DateTime.MinValue ? null : pi.MaxExpire.ToUniversalTime().ToString("o")),
-                online = pi.MaxExpire > now
+                var peerHost = hostMap.TryGetValue(pi.Url, out var hn) ? hn : "";
+                var ver = !string.IsNullOrEmpty(peerHost) && verByHost.TryGetValue(peerHost, out var vh) ? vh
+                        : verByIp.TryGetValue(HostPart(pi.Url), out var vi) ? vi : "";
+                return new
+                {
+                    providerUrl = pi.Url,
+                    host = peerHost,
+                    apps = pi.Apps.Count,
+                    hashes = pi.HashCount,
+                    version = ver,
+                    lastSeenUtc = (pi.MinExpire == DateTime.MaxValue ? null : pi.MinExpire.AddMinutes(-20).ToUniversalTime().ToString("o")),
+                    expireUtc = (pi.MaxExpire == DateTime.MinValue ? null : pi.MaxExpire.ToUniversalTime().ToString("o")),
+                    online = pi.MaxExpire > now
+                };
             }).ToList<object>();
 
             string[] recentArr;
@@ -956,6 +969,7 @@ namespace RepelService
             var outObj = new
             {
                 version = 1,
+                selfVersion = SelfVersion(),
                 port = Port,
                 selfUrl = string.IsNullOrEmpty(SelfUrl) ? ("http://*:" + Port) : SelfUrl.TrimEnd('/'),
                 source = Source,

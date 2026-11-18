@@ -56,7 +56,7 @@ namespace RepelView
     }
     public class DiagRoot
     {
-        public int port; public string source; public bool tokenRequired; public string cacheDir; public string selfUrl;
+        public int port; public string source; public bool tokenRequired; public string cacheDir; public string selfUrl; public string selfVersion;
         public long menuVersion; public long uptimeSec;
         public CacheInfo cache;
         public PropelInfo propel; public List<PeerRow> peers; public StatsInfo stats; public List<string> recent;
@@ -271,7 +271,7 @@ namespace RepelView
                 providerUrl = d.selfUrl,
                 host = "本机",
                 HostText = "本机",
-                version = "-",
+                version = string.IsNullOrEmpty(d.selfVersion) ? "-" : "v" + d.selfVersion,
                 apps = d.cache?.apps ?? 0,
                 hashes = d.cache?.hashes ?? 0,
                 online = true,
