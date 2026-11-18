@@ -1157,6 +1157,7 @@ namespace RepelService
             foreach (JObject o in selected.Cast<JObject>()) { var id = (string)o["id"]; if (!string.IsNullOrEmpty(id)) selIds.Add(id); }
             var knownDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var selDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var legacyIdDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // 历史遗留的数字 id 目录（其 id 已有真实 dir）
             try
             {
                 var lstFile = Path.Combine(CacheDir, "all.lst");
@@ -1169,6 +1170,9 @@ namespace RepelService
                         if (string.IsNullOrEmpty(dir)) continue;
                         knownDirs.Add(dir);
                         if (!string.IsNullOrEmpty(id) && selIds.Contains(id)) selDirs.Add(dir);
+                        // id 与真实 dir 不同名时，数字 id 目录属于旧版本遗留的重复缓存
+                        if (!string.IsNullOrEmpty(id) && !id.Equals(dir, StringComparison.OrdinalIgnoreCase))
+                            legacyIdDirs.Add(id);
                     }
                 }
             }
@@ -1177,6 +1181,12 @@ namespace RepelService
             foreach (var d in Directory.GetDirectories(CacheDir))
             {
                 var name = Path.GetFileName(d.TrimEnd('\\'));
+                if (legacyIdDirs.Contains(name) && !knownDirs.Contains(name))
+                {
+                    try { Directory.Delete(d, true); Log($"缓存清理：移除旧版遗留的数字 id 目录 {name}"); }
+                    catch (Exception ex) { Log($"缓存清理：删除 id 目录 {name} 失败：" + ex.Message); }
+                    continue;
+                }
                 if (!knownDirs.Contains(name)) continue;   // 只清理已知软件目录
                 if (selDirs.Contains(name)) continue;
                 try { Directory.Delete(d, true); Log($"缓存清理：移除未选中软件目录 {name}"); }
@@ -1224,7 +1234,10 @@ namespace RepelService
         {
             var id = (string)o["id"];
             if (string.IsNullOrEmpty(id)) return;
-            var dir = await DirForAsync(id);
+            // 优先用选中条目自带的 dir（与 Impel 落盘目录名一致），缺失时才走 id→dir 映射
+            var dir = (string)o["dir"];
+            if (string.IsNullOrEmpty(dir)) dir = await DirForAsync(id);
+            if (string.IsNullOrEmpty(dir)) dir = id;
             var baseReq = Source.TrimEnd('/') + "/" + Uri.EscapeDataString(id);
             var tok = FirstToken();
             var q = string.IsNullOrEmpty(tok) ? "" : "?token=" + Uri.EscapeDataString(tok);
@@ -1280,7 +1293,9 @@ namespace RepelService
         }
 
         // id → 中文真实目录名 映射（由缓存的 all.lst 解析），供回源/缓存落盘时用中文目录而非数字 id
+        // 与 Impel 的 AppDirName（dir→name→id）保持同一回退语义：查不到时回退应用显示名，而非数字 id
         static Dictionary<string, string> _idToDir;
+        static Dictionary<string, string> _idToName;
         static DateTime _idToDirTime = DateTime.MinValue;
         static async Task<string> DirForAsync(string appId)
         {
@@ -1290,6 +1305,7 @@ namespace RepelService
             {
                 try { await FetchAllLstCachedAsync(); } catch { } // 确保 all.lst 已落盘缓存
                 var m = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                var nm = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 try
                 {
                     var lstFile = Path.Combine(CacheDir, "all.lst");
@@ -1298,15 +1314,19 @@ namespace RepelService
                         var arr = JArray.Parse(File.ReadAllText(lstFile));
                         foreach (JObject o in arr.Cast<JObject>())
                         {
-                            var id = (string)o["id"]; var dir = (string)o["dir"];
-                            if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(dir) && !m.ContainsKey(id)) m[id] = dir;
+                            var id = (string)o["id"]; var dir = (string)o["dir"]; var name = (string)o["name"];
+                            if (string.IsNullOrEmpty(id)) continue;
+                            if (!string.IsNullOrEmpty(dir) && !m.ContainsKey(id)) m[id] = dir;
+                            if (!string.IsNullOrEmpty(name) && !nm.ContainsKey(id)) nm[id] = name;
                         }
                     }
                 }
                 catch { }
-                _idToDir = m; _idToDirTime = now;
+                _idToDir = m; _idToName = nm; _idToDirTime = now;
             }
-            return _idToDir.TryGetValue(appId, out var d) ? d : appId;
+            // 回退顺序与 Impel.AppDirName 一致：dir → name → id
+            return _idToDir.TryGetValue(appId, out var d) ? d
+                 : _idToName.TryGetValue(appId, out var n) ? n : appId;
         }
 
         static async Task ServeFile(HttpListenerContext ctx)
